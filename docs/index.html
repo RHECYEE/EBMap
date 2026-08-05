@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#173f35" />
+    <meta name="description" content="Search local roads, addresses, saved locations, and official mile markers, then tap the map to copy coordinates." />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Field Map" />
+    <title>Field Map</title>
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./assets/app-icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./assets/app-icon-192.png" />
+    <link rel="stylesheet" href="./vendor/leaflet/leaflet.css" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main id="map" aria-label="Interactive field map"></main>
+
+    <section class="search-panel" aria-label="Map search">
+      <div class="brand-row">
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32"><path d="M16 3a9 9 0 0 0-9 9c0 7.1 9 17 9 17s9-9.9 9-17a9 9 0 0 0-9-9Zm0 5.4a3.6 3.6 0 1 1 0 7.2 3.6 3.6 0 0 1 0-7.2Z" /></svg>
+        </div>
+        <div>
+          <h1>Field Map</h1>
+          <p id="data-summary">Loading local map data...</p>
+        </div>
+        <div class="brand-actions">
+          <button id="data-button" class="small-button" type="button">Data</button>
+          <button id="install-button" class="small-button install-button" type="button" hidden>Install</button>
+        </div>
+      </div>
+
+      <div class="search-box">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m20.5 19-4.4-4.4a7 7 0 1 0-1.5 1.5l4.4 4.4 1.5-1.5ZM5 10.5a5.5 5.5 0 1 1 11 0 5.5 5.5 0 0 1-11 0Z" /></svg>
+        <label class="sr-only" for="search-input">Search roads, addresses, personal locations, and mile markers</label>
+        <input id="search-input" type="search" autocomplete="off" enterkeyhint="search" placeholder="Search this map" disabled />
+        <button id="clear-search" class="clear-button" type="button" aria-label="Clear search" hidden>&times;</button>
+      </div>
+
+      <div class="filter-row" role="group" aria-label="Search result type">
+        <button class="filter-chip active" type="button" data-filter="all">All</button>
+        <button class="filter-chip" type="button" data-filter="address">Addresses</button>
+        <button class="filter-chip" type="button" data-filter="personal">My locations</button>
+        <button class="filter-chip" type="button" data-filter="road">Roads</button>
+        <button class="filter-chip" type="button" data-filter="mile">Mile markers</button>
+      </div>
+
+      <div id="search-results" class="search-results" role="listbox" aria-label="Search results" hidden></div>
+    </section>
+
+    <div class="map-actions" aria-label="Map controls">
+      <button id="locate-button" class="map-action" type="button" aria-label="Show my current location" title="Show my location">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 2h2v3.1A7 7 0 0 1 18.9 11H22v2h-3.1a7 7 0 0 1-5.9 5.9V22h-2v-3.1A7 7 0 0 1 5.1 13H2v-2h3.1A7 7 0 0 1 11 5.1V2Zm1 5a5 5 0 1 0 0 10 5 5 0 0 0 0-10Zm0 3a2 2 0 1 1 0 4 2 2 0 0 1 0-4Z" /></svg>
+      </button>
+      <div id="connection-state" class="connection-state">Online map</div>
+    </div>
+
+    <section id="coordinate-card" class="coordinate-card" aria-live="polite" hidden>
+      <div>
+        <span class="eyebrow">Coordinates copied</span>
+        <strong id="coordinate-value">--</strong>
+        <span id="coordinate-context" class="coordinate-context">Tap anywhere to copy a new point</span>
+      </div>
+      <div class="coordinate-actions">
+        <button id="copy-again" type="button">Copy</button>
+        <button id="share-coordinates" type="button">Share</button>
+        <a id="navigate-link" href="#" target="_blank" rel="noopener">Navigate</a>
+      </div>
+    </section>
+
+    <dialog id="data-dialog" class="data-dialog" aria-labelledby="data-dialog-title">
+      <div class="dialog-header">
+        <div>
+          <span class="eyebrow">Local and private</span>
+          <h2 id="data-dialog-title">Data &amp; sharing</h2>
+        </div>
+        <button id="close-data-dialog" class="dialog-close" type="button" aria-label="Close data panel">&times;</button>
+      </div>
+      <p class="dialog-intro">Import an update received by email, Bluetooth, Teams, text, or another channel. Updates stay on this device.</p>
+      <div class="data-source-card">
+        <strong id="data-source-name">Packaged map data</strong>
+        <span id="data-source-detail">Checking update date...</span>
+      </div>
+      <div class="data-action-list">
+        <button id="import-data" type="button">
+          <strong>Import update</strong>
+          <span>Choose a .fieldmap.json file</span>
+        </button>
+        <button id="share-data" type="button">
+          <strong>Send current update</strong>
+          <span>Use email, Bluetooth, Teams, or another app</span>
+        </button>
+        <button id="export-data" type="button">
+          <strong>Save update file</strong>
+          <span>Download a copy for manual sharing</span>
+        </button>
+        <button id="reset-data" class="danger-soft" type="button" hidden>
+          <strong>Use packaged data</strong>
+          <span>Remove the imported update from this device</span>
+        </button>
+      </div>
+      <p id="data-status" class="data-status" role="status" aria-live="polite"></p>
+      <input id="data-file-input" type="file" accept=".json,.fieldmap.json,application/json" hidden />
+    </dialog>
+
+    <div id="loading" class="loading-card" role="status">
+      <span class="spinner" aria-hidden="true"></span>
+      Preparing offline map...
+    </div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <noscript>This map requires JavaScript.</noscript>
+    <script src="./vendor/leaflet/leaflet.js"></script>
+    <script src="./app.js" defer></script>
+  </body>
+</html>
