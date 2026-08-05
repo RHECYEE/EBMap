@@ -4,16 +4,17 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#173f35" />
-    <meta name="description" content="Search local roads, addresses, saved locations, and official mile markers, then tap the map to copy coordinates." />
+    <meta name="description" content="Search communities, roads, addresses, saved locations, and official mile markers, then tap a house to navigate." />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Field Map" />
     <title>Field Map</title>
+    <style>[hidden] { display: none !important; }</style>
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="icon" href="./assets/app-icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="./assets/app-icon-192.png" />
     <link rel="stylesheet" href="./vendor/leaflet/leaflet.css" />
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=online-1" />
   </head>
   <body>
     <main id="map" aria-label="Interactive field map"></main>
@@ -35,16 +36,18 @@
 
       <div class="search-box">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m20.5 19-4.4-4.4a7 7 0 1 0-1.5 1.5l4.4 4.4 1.5-1.5ZM5 10.5a5.5 5.5 0 1 1 11 0 5.5 5.5 0 0 1-11 0Z" /></svg>
-        <label class="sr-only" for="search-input">Search roads, addresses, personal locations, and mile markers</label>
+        <label class="sr-only" for="search-input">Search communities, roads, addresses, personal locations, and mile markers</label>
         <input id="search-input" type="search" autocomplete="off" enterkeyhint="search" placeholder="Search this map" disabled />
         <button id="clear-search" class="clear-button" type="button" aria-label="Clear search" hidden>&times;</button>
       </div>
 
       <div class="filter-row" role="group" aria-label="Search result type">
         <button class="filter-chip active" type="button" data-filter="all">All</button>
+        <button class="filter-chip" type="button" data-filter="community">Communities</button>
         <button class="filter-chip" type="button" data-filter="address">Addresses</button>
         <button class="filter-chip" type="button" data-filter="personal">My locations</button>
         <button class="filter-chip" type="button" data-filter="road">Roads</button>
+        <button class="filter-chip" type="button" data-filter="building">Buildings</button>
         <button class="filter-chip" type="button" data-filter="mile">Mile markers</button>
       </div>
 
@@ -108,12 +111,12 @@
 
     <div id="loading" class="loading-card" role="status">
       <span class="spinner" aria-hidden="true"></span>
-      Preparing offline map...
+      Loading map data...
     </div>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
     <noscript>This map requires JavaScript.</noscript>
     <script src="./vendor/leaflet/leaflet.js"></script>
-    <script src="./app.js" defer></script>
+    <script src="./app.js?v=online-1" defer></script>
   </body>
 </html>

@@ -14,6 +14,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 
 html, body, #map {
   width: 100%;
@@ -32,6 +33,70 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .leaflet-control-attribution { font-size: 10px; }
 .leaflet-control-zoom { border: 0 !important; box-shadow: var(--shadow) !important; }
 .leaflet-control-zoom a { color: var(--ink) !important; border-color: var(--line) !important; }
+
+.community-marker {
+  display: grid !important;
+  place-items: center;
+  border: 0;
+  background: transparent;
+}
+.community-marker span {
+  display: inline-block;
+  max-width: 168px;
+  padding: 5px 9px;
+  overflow: hidden;
+  border: 2px solid rgba(255, 255, 255, 0.96);
+  border-radius: 9px;
+  color: #123f35;
+  background: rgba(226, 244, 236, 0.94);
+  box-shadow: 0 2px 8px rgba(18, 51, 45, 0.3);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.15;
+  text-align: center;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.leaflet-tooltip.map-label {
+  padding: 3px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  border-radius: 6px;
+  box-shadow: 0 1px 5px rgba(17, 40, 34, 0.32);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 780;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+.leaflet-tooltip.map-label::before { display: none; }
+.leaflet-tooltip.road-label { color: #173f35; background: rgba(255, 255, 248, 0.92); }
+.leaflet-tooltip.address-label { color: #164d78; background: rgba(239, 248, 255, 0.96); }
+.leaflet-tooltip.personal-label { color: #7a421e; background: rgba(255, 246, 237, 0.97); }
+.leaflet-tooltip.mile-label { color: #543b78; background: rgba(248, 243, 255, 0.96); }
+.leaflet-tooltip.hover-label { color: var(--ink); background: rgba(255, 255, 252, 0.96); }
+
+.map-popup { min-width: 190px; }
+.map-popup > strong { font-size: 14px; }
+.map-popup > small { color: var(--muted); }
+.popup-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 10px; }
+.popup-actions button, .popup-actions a {
+  display: grid;
+  place-items: center;
+  min-height: 36px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 8px;
+  text-align: center;
+  text-decoration: none;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 780;
+  cursor: pointer;
+}
+.popup-actions button { color: var(--ink); background: var(--green-soft); }
+.popup-actions a { color: white; background: var(--green); }
 
 .search-panel {
   position: fixed;
@@ -76,7 +141,9 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .result-item:hover, .result-item:focus-visible { outline: 0; background: #eef4f0; }
 .result-dot { width: 9px; height: 9px; margin-top: 5px; border-radius: 50%; background: var(--blue); }
 .result-item[data-kind="personal"] .result-dot { background: var(--amber); }
+.result-item[data-kind="community"] .result-dot { width: 10px; height: 10px; border: 2px solid white; background: var(--green); box-shadow: 0 0 0 1px var(--green); }
 .result-item[data-kind="road"] .result-dot { border-radius: 2px; background: var(--green-dark); }
+.result-item[data-kind="building"] .result-dot { border-radius: 2px; background: #8b6d4f; }
 .result-item[data-kind="mile"] .result-dot { background: #7657a8; }
 .result-copy { min-width: 0; }
 .result-label { display: block; overflow: hidden; font-size: 14px; font-weight: 720; text-overflow: ellipsis; white-space: nowrap; }
