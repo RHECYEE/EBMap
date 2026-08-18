@@ -14,7 +14,7 @@
     <link rel="icon" href="./assets/app-icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="./assets/app-icon-192.png" />
     <link rel="stylesheet" href="./vendor/leaflet/leaflet.css" />
-    <link rel="stylesheet" href="./styles.css?v=online-1" />
+    <link rel="stylesheet" href="./styles.css?v=collect-1" />
   </head>
   <body>
     <main id="map" aria-label="Interactive field map"></main>
@@ -49,16 +49,28 @@
         <button class="filter-chip" type="button" data-filter="road">Roads</button>
         <button class="filter-chip" type="button" data-filter="building">Buildings</button>
         <button class="filter-chip" type="button" data-filter="mile">Mile markers</button>
+        <button class="filter-chip" type="button" data-filter="collected">Collected</button>
       </div>
 
       <div id="search-results" class="search-results" role="listbox" aria-label="Search results" hidden></div>
     </section>
 
     <div class="map-actions" aria-label="Map controls">
+      <button id="collect-button" class="map-action" type="button" aria-pressed="false" aria-label="Collect a new point" title="Collect a point">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a7 7 0 0 0-7 7c0 5.25 7 13 7 13s7-7.75 7-13a7 7 0 0 0-7-7Zm1 4v2h2v2h-2v2h-2v-2H9V8h2V6h2Z" /></svg>
+      </button>
       <button id="locate-button" class="map-action" type="button" aria-label="Show my current location" title="Show my location">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 2h2v3.1A7 7 0 0 1 18.9 11H22v2h-3.1a7 7 0 0 1-5.9 5.9V22h-2v-3.1A7 7 0 0 1 5.1 13H2v-2h3.1A7 7 0 0 1 11 5.1V2Zm1 5a5 5 0 1 0 0 10 5 5 0 0 0 0-10Zm0 3a2 2 0 1 1 0 4 2 2 0 0 1 0-4Z" /></svg>
       </button>
       <div id="connection-state" class="connection-state">Online map</div>
+    </div>
+
+    <div id="collect-hint" class="collect-hint" role="status" hidden>
+      <div>
+        <span class="eyebrow">Collecting</span>
+        <strong>Tap the map where the point belongs</strong>
+      </div>
+      <button id="cancel-collect" type="button">Cancel</button>
     </div>
 
     <section id="coordinate-card" class="coordinate-card" aria-live="polite" hidden>
@@ -107,6 +119,56 @@
       </div>
       <p id="data-status" class="data-status" role="status" aria-live="polite"></p>
       <input id="data-file-input" type="file" accept=".json,.fieldmap.json,application/json" hidden />
+
+      <div class="dialog-section">
+        <span class="eyebrow">Field collection</span>
+        <h3>Points collected on this device</h3>
+        <div class="data-source-card">
+          <strong id="collected-summary">No collected points yet</strong>
+          <span id="collected-detail">Tap the pin button on the map to add one.</span>
+        </div>
+        <div class="data-action-list">
+          <button id="send-collected" type="button">
+            <strong>Send collected points</strong>
+            <span>Text or email the collected points only</span>
+          </button>
+          <button id="export-collected" type="button">
+            <strong>Save collected file</strong>
+            <span>Download a .geojson of the collected points only</span>
+          </button>
+          <button id="clear-collected" class="danger-soft" type="button">
+            <strong>Clear collected points</strong>
+            <span>Remove every collected point from this device</span>
+          </button>
+        </div>
+        <p id="collected-status" class="data-status" role="status" aria-live="polite"></p>
+      </div>
+    </dialog>
+
+    <dialog id="point-dialog" class="data-dialog point-dialog" aria-labelledby="point-dialog-title">
+      <div class="dialog-header">
+        <div>
+          <span class="eyebrow">Stays on this device</span>
+          <h2 id="point-dialog-title">New point</h2>
+        </div>
+        <button id="close-point-dialog" class="dialog-close" type="button" aria-label="Close without saving">&times;</button>
+      </div>
+      <div class="data-source-card">
+        <strong id="point-coordinates">--</strong>
+        <span>Latitude, longitude of the tapped location</span>
+      </div>
+      <form id="point-form" class="field-form">
+        <label for="point-address">Address</label>
+        <input id="point-address" type="text" autocomplete="off" autocapitalize="words" enterkeyhint="next" placeholder="e.g. 142 Elm Rd" />
+        <label for="point-name">Name <span class="field-optional">optional</span></label>
+        <input id="point-name" type="text" autocomplete="off" autocapitalize="words" enterkeyhint="done" placeholder="e.g. green barn, no mailbox" />
+        <p id="point-status" class="data-status" role="status" aria-live="polite"></p>
+        <div class="field-actions">
+          <button id="delete-point" class="danger-soft" type="button" hidden>Delete</button>
+          <button id="cancel-point" type="button">Cancel</button>
+          <button id="save-point" class="primary" type="submit">Save point</button>
+        </div>
+      </form>
     </dialog>
 
     <div id="loading" class="loading-card" role="status">
@@ -117,6 +179,6 @@
 
     <noscript>This map requires JavaScript.</noscript>
     <script src="./vendor/leaflet/leaflet.js"></script>
-    <script src="./app.js?v=online-1" defer></script>
+    <script src="./app.js?v=collect-1" defer></script>
   </body>
 </html>
