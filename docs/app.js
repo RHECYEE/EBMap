@@ -28,6 +28,25 @@ const els = {
   exportData: document.querySelector("#export-data"),
   resetData: document.querySelector("#reset-data"),
   dataFileInput: document.querySelector("#data-file-input"),
+  collectButton: document.querySelector("#collect-button"),
+  collectHint: document.querySelector("#collect-hint"),
+  cancelCollect: document.querySelector("#cancel-collect"),
+  pointDialog: document.querySelector("#point-dialog"),
+  pointDialogTitle: document.querySelector("#point-dialog-title"),
+  closePointDialog: document.querySelector("#close-point-dialog"),
+  pointCoordinates: document.querySelector("#point-coordinates"),
+  pointForm: document.querySelector("#point-form"),
+  pointAddress: document.querySelector("#point-address"),
+  pointName: document.querySelector("#point-name"),
+  pointStatus: document.querySelector("#point-status"),
+  deletePoint: document.querySelector("#delete-point"),
+  cancelPoint: document.querySelector("#cancel-point"),
+  collectedSummary: document.querySelector("#collected-summary"),
+  collectedDetail: document.querySelector("#collected-detail"),
+  collectedStatus: document.querySelector("#collected-status"),
+  sendCollected: document.querySelector("#send-collected"),
+  exportCollected: document.querySelector("#export-collected"),
+  clearCollected: document.querySelector("#clear-collected"),
   filterChips: [...document.querySelectorAll(".filter-chip")],
 };
 
@@ -38,6 +57,8 @@ map.createPane("communityPane");
 map.getPane("communityPane").style.zIndex = "625";
 map.createPane("buildingPane");
 map.getPane("buildingPane").style.zIndex = "350";
+map.createPane("collectedPane");
+map.getPane("collectedPane").style.zIndex = "640";
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
   maxZoom: 19,
   attribution: 'Map &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>; buildings &copy; <a href="https://overturemaps.org/">Overture Maps Foundation</a>',
@@ -50,6 +71,7 @@ const roadLayers = new Map();
 const locationLayers = new Map();
 const communityLayers = new Map();
 const buildingLayers = new Map();
+const collectedLayers = new Map();
 const searchDocuments = [];
 let activeFilter = "all";
 let highlightedRoad = null;
@@ -62,12 +84,20 @@ let currentBundle = null;
 let communityLayerGroup = null;
 let buildingLayerGroup = null;
 let dataSource = "packaged";
+let collectedState = { schemaVersion: 1, type: "field-map-collection", lastExportedUtc: null, features: [] };
+let collectedLayerGroup = null;
+let collectMode = false;
+let draftLatLng = null;
+let editingPointId = null;
 let appConfiguration = { allowPackagedData: false, distribution: "hosted-data-free" };
 
 const DATA_SCHEMA_VERSION = 1;
 const DATA_DB_NAME = "field-map-local-data";
 const DATA_STORE_NAME = "updates";
 const ACTIVE_UPDATE_KEY = "active-update";
+const COLLECTED_POINTS_KEY = "collected-points";
+const COLLECTION_SCHEMA_VERSION = 1;
+const COLLECTED_LABEL_MIN_ZOOM = 16;
 const COMMUNITY_LABEL_MAX_ZOOM = 13;
 const ROAD_LABEL_MIN_ZOOM = 14;
 const MILE_LABEL_MIN_ZOOM = 16;
@@ -164,6 +194,33 @@ async function deleteImportedBundle() {
   });
 }
 
+async function readCollectedPoints() {
+  const database = await openDataDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(DATA_STORE_NAME, "readonly");
+    const request = transaction.objectStore(DATA_STORE_NAME).get(COLLECTED_POINTS_KEY);
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error || new Error("Could not read the collected points"));
+    transaction.oncomplete = () => database.close();
+  });
+}
+
+async function writeCollectedPoints(state) {
+  const database = await openDataDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(DATA_STORE_NAME, "readwrite");
+    transaction.objectStore(DATA_STORE_NAME).put(state, COLLECTED_POINTS_KEY);
+    transaction.oncomplete = () => {
+      database.close();
+      resolve();
+    };
+    transaction.onerror = () => {
+      database.close();
+      reject(transaction.error || new Error("Could not save the collected points"));
+    };
+  });
+}
+
 function validateBundle(candidate) {
   if (!candidate || candidate.type !== "field-map-update" || candidate.schemaVersion !== DATA_SCHEMA_VERSION) {
     throw new Error("This is not a supported Field Map update file");
@@ -236,6 +293,30 @@ async function loadAppConfiguration() {
     console.warn("Using privacy-first app configuration", error);
     return { allowPackagedData: false, distribution: "hosted-data-free" };
   }
+}
+
+let dataSummaryBase = "Loading local map data...";
+
+function setDataSummary(text) {
+  dataSummaryBase = text;
+  refreshDataSummary();
+}
+
+function refreshSearchAvailability() {
+  const searchable = Boolean(currentBundle) || collectedState.features.length > 0;
+  els.searchInput.disabled = !searchable;
+  if (searchable) return;
+  els.searchInput.value = "";
+  els.clearSearch.hidden = true;
+  els.searchResults.hidden = true;
+  els.searchResults.replaceChildren();
+}
+
+function refreshDataSummary() {
+  const total = collectedState.features.length;
+  els.dataSummary.textContent = total
+    ? `${dataSummaryBase} - ${total.toLocaleString()} collected`
+    : dataSummaryBase;
 }
 
 function showToast(message) {
@@ -530,6 +611,11 @@ function updateRenderedLabels() {
   });
 
   const candidates = [];
+  collectedLayers.forEach((layer) => {
+    const visible = visibleBounds.contains(layer.getLatLng());
+    if (visible && zoom >= COLLECTED_LABEL_MIN_ZOOM) candidates.push(layer);
+    else setLocationLabelMode(layer, false);
+  });
   locationLayers.forEach((layer) => {
     const kind = layer.feature.properties.kind;
     const threshold = kind === "mile" ? MILE_LABEL_MIN_ZOOM : HOUSE_LABEL_MIN_ZOOM;
@@ -546,7 +632,7 @@ function updateRenderedLabels() {
     .sort((left, right) => {
       if (left === highlightedLocation) return -1;
       if (right === highlightedLocation) return 1;
-      const priorities = { personal: 0, address: 1, mile: 2 };
+      const priorities = { collected: -1, personal: 0, address: 1, mile: 2 };
       return priorities[left.feature.properties.kind] - priorities[right.feature.properties.kind]
         || left.getLatLng().lat - right.getLatLng().lat;
     })
@@ -643,7 +729,13 @@ function resetHighlights() {
 
 function selectResult(kind, id) {
   resetHighlights();
-  if (kind === "community") {
+  if (kind === "collected") {
+    const layer = collectedLayers.get(id);
+    if (!layer) return;
+    map.flyTo(layer.getLatLng(), 18, { duration: 0.5 });
+    layer.openPopup();
+    copyCoordinates(layer.getLatLng(), layer.feature.properties.label);
+  } else if (kind === "community") {
     const layer = communityLayers.get(id);
     if (!layer) return;
     map.flyTo(layer.getLatLng(), 13, { duration: 0.5 });
@@ -717,19 +809,40 @@ els.filterChips.forEach((chip) => chip.addEventListener("click", () => {
   runSearch();
 }));
 
-map.on("click", (event) => copyCoordinates(event.latlng));
+map.on("click", (event) => {
+  if (collectMode) {
+    openPointForm(event.latlng);
+    return;
+  }
+  copyCoordinates(event.latlng);
+});
 map.on("zoomend moveend", updateRenderedLabels);
 map.on("popupopen", (event) => {
   const popupElement = event.popup.getElement();
-  const copyButton = popupElement?.querySelector("[data-copy-lat]");
-  if (!copyButton) return;
-  L.DomEvent.disableClickPropagation(copyButton);
-  copyButton.addEventListener("click", () => {
-    copyCoordinates(
-      L.latLng(Number(copyButton.dataset.copyLat), Number(copyButton.dataset.copyLng)),
-      copyButton.dataset.copyContext || "Map location",
-    );
-  });
+  if (!popupElement) return;
+  const copyButton = popupElement.querySelector("[data-copy-lat]");
+  if (copyButton) {
+    L.DomEvent.disableClickPropagation(copyButton);
+    copyButton.addEventListener("click", () => {
+      copyCoordinates(
+        L.latLng(Number(copyButton.dataset.copyLat), Number(copyButton.dataset.copyLng)),
+        copyButton.dataset.copyContext || "Map location",
+      );
+    });
+  }
+  const editButton = popupElement.querySelector("[data-edit-point]");
+  if (editButton) {
+    L.DomEvent.disableClickPropagation(editButton);
+    editButton.addEventListener("click", () => {
+      const layer = collectedLayers.get(editButton.dataset.editPoint);
+      if (layer) openPointForm(layer.getLatLng(), editButton.dataset.editPoint);
+    });
+  }
+  const deleteButton = popupElement.querySelector("[data-delete-point]");
+  if (deleteButton) {
+    L.DomEvent.disableClickPropagation(deleteButton);
+    deleteButton.addEventListener("click", () => deleteCollectedPoint(deleteButton.dataset.deletePoint));
+  }
 });
 els.copyAgain.addEventListener("click", async () => {
   if (!copiedCoordinates) return;
@@ -821,6 +934,352 @@ els.installButton.addEventListener("click", async () => {
 });
 window.addEventListener("appinstalled", () => showToast("Field Map installed"));
 
+// --- Field collection -------------------------------------------------------
+// Points collected on this device live in their own IndexedDB key, separate
+// from the imported update, so importing or removing an update never touches
+// unsent field work.
+
+function collectedStyle() {
+  return { pane: "collectedPane", radius: 6, color: "#ffffff", weight: 2, fillColor: "#0f8a7a", fillOpacity: 1 };
+}
+
+function coordinateLabel(latlng) {
+  return `${Number(latlng.lat).toFixed(6)}, ${Number(latlng.lng).toFixed(6)}`;
+}
+
+function collectedPointLabel(address, name, latlng) {
+  return address || name || coordinateLabel(latlng);
+}
+
+function collectedPointSubtitle(feature) {
+  const collected = new Date(feature.properties.collectedUtc || "");
+  const when = Number.isNaN(collected.getTime()) ? "" : ` ${collected.toLocaleDateString([], { dateStyle: "medium" })}`;
+  const name = feature.properties.name;
+  const address = feature.properties.address;
+  const extra = address && name ? ` - ${name}` : "";
+  return `Collected${when}${extra}`;
+}
+
+function normalizeCollectedState(candidate) {
+  const empty = { schemaVersion: COLLECTION_SCHEMA_VERSION, type: "field-map-collection", lastExportedUtc: null, features: [] };
+  if (!candidate || !Array.isArray(candidate.features)) return empty;
+  const features = candidate.features.filter((feature) => {
+    const coordinates = feature?.geometry?.coordinates;
+    return feature?.properties?.id
+      && feature.geometry?.type === "Point"
+      && Array.isArray(coordinates)
+      && coordinates.length >= 2
+      && coordinates.every((value) => Number.isFinite(Number(value)));
+  });
+  return { ...empty, lastExportedUtc: candidate.lastExportedUtc || null, features };
+}
+
+function collectedFeatureLatLng(feature) {
+  const [longitude, latitude] = feature.geometry.coordinates;
+  return L.latLng(Number(latitude), Number(longitude));
+}
+
+function unsentCollectedCount() {
+  return collectedState.features.filter((feature) => !feature.properties.exportedUtc).length;
+}
+
+function collectedPopupHtml(properties, latlng) {
+  const latitude = Number(latlng.lat).toFixed(6);
+  const longitude = Number(latlng.lng).toFixed(6);
+  const detail = properties.address && properties.name
+    ? `${escapeHtml(properties.name)}`
+    : escapeHtml(properties.subtitle || "Collected point");
+  return `<div class="map-popup"><strong>${escapeHtml(properties.label)}</strong><br><small>${detail}</small>
+    <div class="popup-actions">
+      <button type="button" data-copy-lat="${latitude}" data-copy-lng="${longitude}" data-copy-context="${escapeHtml(properties.label)}">Copy coordinates</button>
+      <a href="${navigationUrl(latlng)}" target="_blank" rel="noopener">Navigate</a>
+      <button type="button" data-edit-point="${escapeHtml(properties.id)}">Edit</button>
+      <button type="button" class="popup-danger" data-delete-point="${escapeHtml(properties.id)}">Delete</button>
+    </div></div>`;
+}
+
+function removeIndexedDocument(id) {
+  const index = searchDocuments.findIndex((document) => document.id === id);
+  if (index >= 0) searchDocuments.splice(index, 1);
+}
+
+function removeCollectedLayer(id) {
+  const layer = collectedLayers.get(id);
+  if (!layer) return;
+  if (collectedLayerGroup) collectedLayerGroup.removeLayer(layer);
+  collectedLayers.delete(id);
+  removeIndexedDocument(id);
+}
+
+function renderCollectedPoint(feature) {
+  removeCollectedLayer(feature.properties.id);
+  const latlng = collectedFeatureLatLng(feature);
+  const layer = L.circleMarker(latlng, collectedStyle());
+  layer.feature = feature;
+  layer.bindPopup(collectedPopupHtml(feature.properties, latlng));
+  layer.on("click", (event) => {
+    if (event.originalEvent) L.DomEvent.stopPropagation(event.originalEvent);
+  });
+  collectedLayerGroup.addLayer(layer);
+  collectedLayers.set(feature.properties.id, layer);
+  indexDocument(feature.properties);
+  setLocationLabelMode(layer, false);
+}
+
+function updateCollectedPanel() {
+  const total = collectedState.features.length;
+  const unsent = unsentCollectedCount();
+  els.collectedSummary.textContent = total === 0
+    ? "No collected points yet"
+    : `${total.toLocaleString()} collected point${total === 1 ? "" : "s"}`;
+
+  if (total === 0) {
+    els.collectedDetail.textContent = "Tap the pin button on the map to add one.";
+  } else if (!collectedState.lastExportedUtc) {
+    els.collectedDetail.textContent = `${unsent.toLocaleString()} not sent yet`;
+  } else {
+    const sentNote = `last sent ${new Date(collectedState.lastExportedUtc).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}`;
+    els.collectedDetail.textContent = unsent === 0
+      ? `All points sent - ${sentNote}`
+      : `${unsent.toLocaleString()} not yet sent - ${sentNote}`;
+  }
+
+  els.sendCollected.disabled = total === 0;
+  els.exportCollected.disabled = total === 0;
+  els.clearCollected.disabled = total === 0;
+  refreshDataSummary();
+  refreshSearchAvailability();
+}
+
+async function persistCollectedPoints() {
+  await writeCollectedPoints(collectedState);
+  updateCollectedPanel();
+}
+
+function setCollectMode(active) {
+  collectMode = active;
+  document.body.classList.toggle("collect-mode", active);
+  els.collectButton.setAttribute("aria-pressed", active ? "true" : "false");
+  els.collectHint.hidden = !active;
+  if (active) showToast("Tap the map to place a point");
+}
+
+function openPointDialog() {
+  if (typeof els.pointDialog.showModal === "function") els.pointDialog.showModal();
+  else els.pointDialog.setAttribute("open", "");
+}
+
+function closePointDialog() {
+  if (typeof els.pointDialog.close === "function") els.pointDialog.close();
+  else els.pointDialog.removeAttribute("open");
+  draftLatLng = null;
+  editingPointId = null;
+}
+
+function openPointForm(latlng, existingId = null) {
+  draftLatLng = latlng;
+  editingPointId = existingId;
+  const feature = existingId ? collectedState.features.find((entry) => entry.properties.id === existingId) : null;
+  els.pointDialogTitle.textContent = feature ? "Edit point" : "New point";
+  els.pointCoordinates.textContent = coordinateLabel(latlng);
+  els.pointAddress.value = feature?.properties.address || "";
+  els.pointName.value = feature?.properties.name || "";
+  els.pointStatus.textContent = "";
+  els.deletePoint.hidden = !feature;
+  openPointDialog();
+  window.setTimeout(() => els.pointAddress.focus(), 60);
+}
+
+async function savePointForm() {
+  const address = els.pointAddress.value.trim();
+  const name = els.pointName.value.trim();
+  if (!address && !name) {
+    els.pointStatus.textContent = "Enter an address or a name before saving.";
+    els.pointAddress.focus();
+    return;
+  }
+  if (!draftLatLng) {
+    els.pointStatus.textContent = "This point has no location. Close this and tap the map again.";
+    return;
+  }
+
+  const now = new Date().toISOString();
+  const existing = editingPointId
+    ? collectedState.features.find((entry) => entry.properties.id === editingPointId)
+    : null;
+  const feature = existing || {
+    type: "Feature",
+    geometry: { type: "Point", coordinates: [Number(draftLatLng.lng), Number(draftLatLng.lat)] },
+    properties: {
+      id: `collected-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      kind: "collected",
+      collectedUtc: now,
+      exportedUtc: null,
+    },
+  };
+
+  feature.properties.address = address;
+  feature.properties.name = name;
+  feature.properties.label = collectedPointLabel(address, name, draftLatLng);
+  feature.properties.updatedUtc = now;
+  feature.properties.subtitle = collectedPointSubtitle(feature);
+  if (existing) feature.properties.exportedUtc = null;
+  else collectedState.features.push(feature);
+
+  try {
+    await persistCollectedPoints();
+  } catch (error) {
+    els.pointStatus.textContent = error.message;
+    return;
+  }
+
+  renderCollectedPoint(feature);
+  updateRenderedLabels();
+  closePointDialog();
+  setCollectMode(false);
+  showToast(existing ? "Point updated" : "Point saved to this device");
+}
+
+async function deleteCollectedPoint(id) {
+  const feature = collectedState.features.find((entry) => entry.properties.id === id);
+  if (!feature) return;
+  if (!window.confirm(`Delete "${feature.properties.label}" from this device?`)) return;
+  collectedState.features = collectedState.features.filter((entry) => entry.properties.id !== id);
+  try {
+    await persistCollectedPoints();
+  } catch (error) {
+    showToast(error.message);
+    return;
+  }
+  removeCollectedLayer(id);
+  map.closePopup();
+  if (editingPointId === id) closePointDialog();
+  showToast("Point deleted");
+}
+
+function collectedFileName() {
+  return `field-map-collected-${new Date().toISOString().slice(0, 10)}.geojson`;
+}
+
+function makeCollectedFile() {
+  if (!collectedState.features.length) throw new Error("There are no collected points to send yet");
+  const payload = {
+    type: "FeatureCollection",
+    features: collectedState.features,
+    fieldMap: {
+      type: "field-map-collection",
+      schemaVersion: COLLECTION_SCHEMA_VERSION,
+      generatedUtc: new Date().toISOString(),
+      count: collectedState.features.length,
+    },
+  };
+  return new File([JSON.stringify(payload)], collectedFileName(), { type: "application/geo+json" });
+}
+
+async function markCollectedExported() {
+  const now = new Date().toISOString();
+  collectedState.features.forEach((feature) => {
+    feature.properties.exportedUtc = feature.properties.exportedUtc || now;
+  });
+  collectedState.lastExportedUtc = now;
+  await persistCollectedPoints();
+}
+
+async function sendCollectedPoints() {
+  try {
+    const file = makeCollectedFile();
+    if (navigator.share && navigator.canShare?.({ files: [file] })) {
+      try {
+        await navigator.share({
+          title: "Field Map collected points",
+          text: "Collected points from the field.",
+          files: [file],
+        });
+        await markCollectedExported();
+        els.collectedStatus.textContent = "Collected points sent. They stay on this device too.";
+        return;
+      } catch (error) {
+        if (error?.name === "AbortError") return;
+      }
+    }
+    downloadUpdateFile(file);
+    await markCollectedExported();
+    els.collectedStatus.textContent = "Collected points saved. Attach the file to a text, email, or Teams message.";
+    showToast("Collected points file saved");
+  } catch (error) {
+    els.collectedStatus.textContent = error.message;
+  }
+}
+
+async function saveCollectedFile() {
+  try {
+    downloadUpdateFile(makeCollectedFile());
+    await markCollectedExported();
+    els.collectedStatus.textContent = "Collected points saved to this device.";
+    showToast("Collected points file saved");
+  } catch (error) {
+    els.collectedStatus.textContent = error.message;
+  }
+}
+
+async function clearCollectedPoints() {
+  const unsent = unsentCollectedCount();
+  const message = unsent > 0
+    ? `${unsent} collected point${unsent === 1 ? " has" : "s have"} not been sent yet. Delete every collected point from this device anyway?`
+    : "Delete every collected point from this device?";
+  if (!window.confirm(message)) return;
+  collectedState.features = [];
+  collectedState.lastExportedUtc = null;
+  try {
+    await persistCollectedPoints();
+  } catch (error) {
+    els.collectedStatus.textContent = error.message;
+    return;
+  }
+  [...collectedLayers.keys()].forEach(removeCollectedLayer);
+  els.collectedStatus.textContent = "Collected points removed from this device.";
+  showToast("Collected points cleared");
+}
+
+async function loadCollectedPoints() {
+  collectedLayerGroup = L.layerGroup().addTo(map);
+  try {
+    collectedState = normalizeCollectedState(await readCollectedPoints());
+  } catch (error) {
+    console.warn("Collected points could not be read", error);
+    collectedState = normalizeCollectedState(null);
+  }
+  collectedState.features.forEach(renderCollectedPoint);
+  updateCollectedPanel();
+  updateRenderedLabels();
+}
+
+els.collectButton.addEventListener("click", () => setCollectMode(!collectMode));
+els.cancelCollect.addEventListener("click", () => setCollectMode(false));
+els.closePointDialog.addEventListener("click", () => {
+  closePointDialog();
+  setCollectMode(false);
+});
+els.cancelPoint.addEventListener("click", () => {
+  closePointDialog();
+  setCollectMode(false);
+});
+els.pointDialog.addEventListener("close", () => {
+  draftLatLng = null;
+  editingPointId = null;
+  setCollectMode(false);
+});
+els.pointForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  savePointForm();
+});
+els.deletePoint.addEventListener("click", () => {
+  if (editingPointId) deleteCollectedPoint(editingPointId);
+});
+els.sendCollected.addEventListener("click", sendCollectedPoints);
+els.exportCollected.addEventListener("click", saveCollectedFile);
+els.clearCollected.addEventListener("click", clearCollectedPoints);
+
 async function loadMapData() {
   try {
     appConfiguration = await loadAppConfiguration();
@@ -871,8 +1330,8 @@ async function loadMapData() {
     if (!bundle) {
       if (dataSource !== "invalid") dataSource = "empty";
       currentBundle = null;
-      els.dataSummary.textContent = "No local data - select Data to import an update";
-      els.searchInput.disabled = true;
+      setDataSummary("No local data - select Data to import an update");
+      refreshSearchAvailability();
       hideLoading();
       updateDataPanel();
       showToast("Import a private Field Map update to begin");
@@ -960,9 +1419,9 @@ async function loadMapData() {
 
     map.fitBounds(metadata.bounds, { padding: [20, 20] });
     const counts = metadata.counts;
-    els.dataSummary.textContent = `${counts.communities.toLocaleString()} communities - ${counts.roads.toLocaleString()} roads - ${counts.buildings.toLocaleString()} buildings - ${counts.addresses.toLocaleString()} addresses - ${counts.personalLocations.toLocaleString()} saved - ${counts.mileMarkers.toLocaleString()} markers`;
+    setDataSummary(`${counts.communities.toLocaleString()} communities - ${counts.roads.toLocaleString()} roads - ${counts.buildings.toLocaleString()} buildings - ${counts.addresses.toLocaleString()} addresses - ${counts.personalLocations.toLocaleString()} saved - ${counts.mileMarkers.toLocaleString()} markers`);
     updateDataPanel();
-    els.searchInput.disabled = false;
+    refreshSearchAvailability();
     hideLoading();
     updateRenderedLabels();
   } catch (error) {
@@ -998,4 +1457,5 @@ async function disableOfflineMode() {
 
 window.addEventListener("load", disableOfflineMode);
 
+loadCollectedPoints();
 loadMapData();
