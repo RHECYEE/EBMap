@@ -14,7 +14,7 @@
     <link rel="icon" href="./assets/app-icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="./assets/app-icon-192.png" />
     <link rel="stylesheet" href="./vendor/leaflet/leaflet.css" />
-    <link rel="stylesheet" href="./styles.css?v=collect-1" />
+    <link rel="stylesheet" href="./styles.css?v=layers-1" />
   </head>
   <body>
     <main id="map" aria-label="Interactive field map"></main>
@@ -36,18 +36,15 @@
 
       <div class="search-box">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m20.5 19-4.4-4.4a7 7 0 1 0-1.5 1.5l4.4 4.4 1.5-1.5ZM5 10.5a5.5 5.5 0 1 1 11 0 5.5 5.5 0 0 1-11 0Z" /></svg>
-        <label class="sr-only" for="search-input">Search communities, roads, addresses, personal locations, and mile markers</label>
+        <label class="sr-only" for="search-input">Search roads, addresses, mile markers, and collected points</label>
         <input id="search-input" type="search" autocomplete="off" enterkeyhint="search" placeholder="Search this map" disabled />
         <button id="clear-search" class="clear-button" type="button" aria-label="Clear search" hidden>&times;</button>
       </div>
 
       <div class="filter-row" role="group" aria-label="Search result type">
         <button class="filter-chip active" type="button" data-filter="all">All</button>
-        <button class="filter-chip" type="button" data-filter="community">Communities</button>
         <button class="filter-chip" type="button" data-filter="address">Addresses</button>
-        <button class="filter-chip" type="button" data-filter="personal">My locations</button>
         <button class="filter-chip" type="button" data-filter="road">Roads</button>
-        <button class="filter-chip" type="button" data-filter="building">Buildings</button>
         <button class="filter-chip" type="button" data-filter="mile">Mile markers</button>
         <button class="filter-chip" type="button" data-filter="collected">Collected</button>
       </div>
@@ -56,6 +53,9 @@
     </section>
 
     <div class="map-actions" aria-label="Map controls">
+      <button id="layers-button" class="map-action" type="button" aria-label="Choose map layers" title="Map layers">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5 9-5Zm7.1 8.2 1.9 1.05-9 5-9-5 1.9-1.05L12 15l7.1-3.8Zm0 4 1.9 1.05-9 5-9-5 1.9-1.05L12 19l7.1-3.8Z" /></svg>
+      </button>
       <button id="collect-button" class="map-action" type="button" aria-pressed="false" aria-label="Collect a new point" title="Collect a point">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a7 7 0 0 0-7 7c0 5.25 7 13 7 13s7-7.75 7-13a7 7 0 0 0-7-7Zm1 4v2h2v2h-2v2h-2v-2H9V8h2V6h2Z" /></svg>
       </button>
@@ -145,6 +145,49 @@
       </div>
     </dialog>
 
+    <dialog id="layers-dialog" class="data-dialog" aria-labelledby="layers-dialog-title">
+      <div class="dialog-header">
+        <div>
+          <span class="eyebrow">Map background</span>
+          <h2 id="layers-dialog-title">Layers</h2>
+        </div>
+        <button id="close-layers-dialog" class="dialog-close" type="button" aria-label="Close layers panel">&times;</button>
+      </div>
+
+      <div class="layer-group" role="radiogroup" aria-labelledby="base-layer-label">
+        <span id="base-layer-label" class="layer-label">Base map</span>
+        <button class="layer-option" type="button" role="radio" aria-checked="true" data-base="street">
+          <strong>Street</strong>
+          <span>Road names and place labels</span>
+        </button>
+        <button class="layer-option" type="button" role="radio" aria-checked="false" data-base="satellite">
+          <strong>Satellite</strong>
+          <span>Aerial imagery to full zoom</span>
+        </button>
+        <button class="layer-option" type="button" role="radio" aria-checked="false" data-base="topographic">
+          <strong>Topographic</strong>
+          <span>USGS topo quads, sharp to zoom 16</span>
+        </button>
+      </div>
+
+      <div class="layer-group" role="radiogroup" aria-labelledby="contour-layer-label">
+        <span id="contour-layer-label" class="layer-label">Contours</span>
+        <button class="layer-option" type="button" role="radio" aria-checked="true" data-contour="off">
+          <strong>Off</strong>
+          <span>No elevation lines</span>
+        </button>
+        <button class="layer-option" type="button" role="radio" aria-checked="false" data-contour="5">
+          <strong>5 m bands</strong>
+          <span>Fine detail for gentle ground</span>
+        </button>
+        <button class="layer-option" type="button" role="radio" aria-checked="false" data-contour="10">
+          <strong>10 m bands</strong>
+          <span>Cleaner read on steep ground</span>
+        </button>
+      </div>
+      <p id="layers-status" class="data-status" role="status" aria-live="polite"></p>
+    </dialog>
+
     <dialog id="point-dialog" class="data-dialog point-dialog" aria-labelledby="point-dialog-title">
       <div class="dialog-header">
         <div>
@@ -179,6 +222,6 @@
 
     <noscript>This map requires JavaScript.</noscript>
     <script src="./vendor/leaflet/leaflet.js"></script>
-    <script src="./app.js?v=collect-1" defer></script>
+    <script src="./app.js?v=layers-1" defer></script>
   </body>
 </html>

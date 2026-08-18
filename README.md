@@ -9,6 +9,18 @@ The hosted application contains no roads, addresses, personal locations, mile ma
 - iPhone or iPad: open the GitHub Pages site in Safari, use **Share**, then **Add to Home Screen**.
 - Android: open the site in Chrome and choose **Install app** or **Add to Home screen**.
 
+## Map layers
+
+The layers button on the map switches the background between **Street** (OpenStreetMap),
+**Satellite** (Esri World Imagery, detailed to zoom 19), and **Topographic** (USGS topo quads, which
+are sharp to zoom 16 and soften beyond it).
+
+Contour lines can be overlaid on any of those at **5 m** or **10 m** intervals. They are drawn on
+demand from the USGS 3DEP elevation service and appear from zoom 13 in, below which the lines crowd
+together into a solid mass. Roads switch to a high-contrast stroke over satellite imagery.
+
+The chosen background and contour interval are remembered on the device.
+
 ## Collecting points in the field
 
 Tap the pin button in the top right, then tap the map where the point belongs. Enter an address, and

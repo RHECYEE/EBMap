@@ -28,6 +28,12 @@ const els = {
   exportData: document.querySelector("#export-data"),
   resetData: document.querySelector("#reset-data"),
   dataFileInput: document.querySelector("#data-file-input"),
+  layersButton: document.querySelector("#layers-button"),
+  layersDialog: document.querySelector("#layers-dialog"),
+  closeLayersDialog: document.querySelector("#close-layers-dialog"),
+  layersStatus: document.querySelector("#layers-status"),
+  baseOptions: [...document.querySelectorAll("[data-base]")],
+  contourOptions: [...document.querySelectorAll("[data-contour]")],
   collectButton: document.querySelector("#collect-button"),
   collectHint: document.querySelector("#collect-hint"),
   cancelCollect: document.querySelector("#cancel-collect"),
@@ -57,13 +63,11 @@ map.createPane("communityPane");
 map.getPane("communityPane").style.zIndex = "625";
 map.createPane("buildingPane");
 map.getPane("buildingPane").style.zIndex = "350";
+map.createPane("contourPane");
+map.getPane("contourPane").style.zIndex = "250";
+map.getPane("contourPane").style.pointerEvents = "none";
 map.createPane("collectedPane");
 map.getPane("collectedPane").style.zIndex = "640";
-L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  maxZoom: 19,
-  attribution: 'Map &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>; buildings &copy; <a href="https://overturemaps.org/">Overture Maps Foundation</a>',
-}).addTo(map);
-
 L.DomEvent.disableClickPropagation(els.searchPanel);
 L.DomEvent.disableScrollPropagation(els.searchPanel);
 
@@ -86,6 +90,9 @@ let buildingLayerGroup = null;
 let dataSource = "packaged";
 let collectedState = { schemaVersion: 1, type: "field-map-collection", lastExportedUtc: null, features: [] };
 let collectedLayerGroup = null;
+let activeBaseMap = "street";
+let activeContour = "off";
+let contourLayer = null;
 let collectMode = false;
 let draftLatLng = null;
 let editingPointId = null;
@@ -934,6 +941,165 @@ els.installButton.addEventListener("click", async () => {
 });
 window.addEventListener("appinstalled", () => showToast("Field Map installed"));
 
+// --- Base maps and contours -------------------------------------------------
+// Contours come from the USGS 3DEP elevation service, which renders them on
+// demand for a requested bounding box, so any interval can be asked for. Below
+// CONTOUR_MIN_ZOOM the lines crowd into a solid mass, so the layer stays off.
+
+const CONTOUR_SERVICE = "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/exportImage";
+const CONTOUR_MIN_ZOOM = 13;
+const BASE_MAP_STORAGE_KEY = "field-map-base-layer";
+const CONTOUR_STORAGE_KEY = "field-map-contour-interval";
+
+const ContourTileLayer = L.TileLayer.extend({
+  options: {
+    minZoom: CONTOUR_MIN_ZOOM,
+    maxZoom: 19,
+    interval: 10,
+    opacity: 0.75,
+    attribution: 'Contours &copy; <a href="https://www.usgs.gov/3d-elevation-program">USGS 3DEP</a>',
+  },
+  getTileUrl(coords) {
+    const size = this.getTileSize();
+    const topLeft = this._map.unproject(coords.scaleBy(size), coords.z);
+    const bottomRight = this._map.unproject(coords.add([1, 1]).scaleBy(size), coords.z);
+    const northWest = L.Projection.SphericalMercator.project(topLeft);
+    const southEast = L.Projection.SphericalMercator.project(bottomRight);
+    const renderingRule = {
+      rasterFunction: "Contour",
+      rasterFunctionArguments: {
+        ContourType: 0,
+        ContourInterval: this.options.interval,
+        ZBase: 0,
+        NumberOfContours: 0,
+        ZFactor: 1,
+      },
+      variableName: "Raster",
+    };
+    const parameters = new URLSearchParams({
+      bbox: `${northWest.x},${southEast.y},${southEast.x},${northWest.y}`,
+      bboxSR: "3857",
+      imageSR: "3857",
+      size: `${size.x},${size.y}`,
+      format: "png32",
+      transparent: "true",
+      f: "image",
+      renderingRule: JSON.stringify(renderingRule),
+    });
+    return `${CONTOUR_SERVICE}?${parameters.toString()}`;
+  },
+});
+
+const baseMaps = {
+  street: L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: 'Map &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>; buildings &copy; <a href="https://overturemaps.org/">Overture Maps Foundation</a>',
+  }),
+  satellite: L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+    maxZoom: 19,
+    maxNativeZoom: 19,
+    attribution: "Imagery &copy; Esri, Maxar, Earthstar Geographics, and the GIS user community",
+  }),
+  topographic: L.tileLayer("https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}", {
+    // The USGS topo cache stops at zoom 16 over this area; Leaflet upscales
+    // beyond that instead of leaving the map blank.
+    maxZoom: 19,
+    maxNativeZoom: 16,
+    attribution: 'Topographic map &copy; <a href="https://www.usgs.gov/programs/national-geospatial-program/national-map">USGS The National Map</a>',
+  }),
+};
+
+const darkBaseMaps = new Set(["satellite"]);
+
+function readStoredPreference(key, fallback) {
+  try {
+    return window.localStorage.getItem(key) || fallback;
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function storePreference(key, value) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch (_) {
+    // Private browsing can refuse storage; the choice simply will not persist.
+  }
+}
+
+function applyRoadContrast() {
+  // Dark green hairlines disappear over aerial imagery, so roads switch to a
+  // warm high-contrast stroke whenever the base map is dark.
+  const dark = darkBaseMaps.has(activeBaseMap);
+  roadStyle.color = dark ? "#ffd24a" : "#31594e";
+  roadStyle.opacity = dark ? 0.95 : 0.82;
+  roadStyle.weight = dark ? 2.6 : 2.2;
+  roadLayers.forEach((layer) => {
+    if (layer !== highlightedRoad) layer.setStyle(roadStyle);
+  });
+  document.body.classList.toggle("dark-base", dark);
+}
+
+function setBaseMap(name) {
+  const next = baseMaps[name] ? name : "street";
+  Object.entries(baseMaps).forEach(([key, layer]) => {
+    if (key === next) {
+      if (!map.hasLayer(layer)) layer.addTo(map);
+    } else if (map.hasLayer(layer)) {
+      map.removeLayer(layer);
+    }
+  });
+  baseMaps[next].bringToBack();
+  activeBaseMap = next;
+  storePreference(BASE_MAP_STORAGE_KEY, next);
+  els.baseOptions.forEach((button) => button.setAttribute("aria-checked", button.dataset.base === next ? "true" : "false"));
+  applyRoadContrast();
+  updateLayersStatus();
+}
+
+function setContourInterval(value) {
+  const next = ["5", "10"].includes(String(value)) ? String(value) : "off";
+  if (contourLayer) {
+    map.removeLayer(contourLayer);
+    contourLayer = null;
+  }
+  if (next !== "off") {
+    contourLayer = new ContourTileLayer(null, { interval: Number(next), pane: "contourPane" });
+    contourLayer.addTo(map);
+  }
+  activeContour = next;
+  storePreference(CONTOUR_STORAGE_KEY, next);
+  els.contourOptions.forEach((button) => button.setAttribute("aria-checked", button.dataset.contour === next ? "true" : "false"));
+  updateLayersStatus();
+}
+
+function updateLayersStatus() {
+  if (activeContour === "off") {
+    els.layersStatus.textContent = activeBaseMap === "topographic"
+      ? "USGS topo sheets are sharpest up to zoom 16, then soften as you zoom further."
+      : "";
+    return;
+  }
+  els.layersStatus.textContent = map.getZoom() < CONTOUR_MIN_ZOOM
+    ? `${activeContour} m contours draw once you zoom in closer.`
+    : `${activeContour} m contours are drawn live from USGS elevation data.`;
+}
+
+function restoreLayerPreferences() {
+  setBaseMap(readStoredPreference(BASE_MAP_STORAGE_KEY, "street"));
+  setContourInterval(readStoredPreference(CONTOUR_STORAGE_KEY, "off"));
+}
+
+els.layersButton.addEventListener("click", () => {
+  updateLayersStatus();
+  if (typeof els.layersDialog.showModal === "function") els.layersDialog.showModal();
+  else els.layersDialog.setAttribute("open", "");
+});
+els.closeLayersDialog.addEventListener("click", () => els.layersDialog.close());
+els.baseOptions.forEach((button) => button.addEventListener("click", () => setBaseMap(button.dataset.base)));
+els.contourOptions.forEach((button) => button.addEventListener("click", () => setContourInterval(button.dataset.contour)));
+map.on("zoomend", updateLayersStatus);
+
 // --- Field collection -------------------------------------------------------
 // Points collected on this device live in their own IndexedDB key, separate
 // from the imported update, so importing or removing an update never touches
@@ -1457,5 +1623,6 @@ async function disableOfflineMode() {
 
 window.addEventListener("load", disableOfflineMode);
 
+restoreLayerPreferences();
 loadCollectedPoints();
 loadMapData();
