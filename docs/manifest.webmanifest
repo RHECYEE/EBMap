@@ -1,7 +1,7 @@
 {
   "name": "Field Map - Roads & Locations",
   "short_name": "Field Map",
-  "description": "Search local roads, official addresses, saved locations, and official mile markers. Tap the map to copy navigation coordinates.",
+  "description": "Search local roads, official addresses, saved locations, and official mile markers. Tap the map to copy navigation coordinates, collect points in the field, and hand them to the next crew as pasted text.",
   "id": "./",
   "start_url": "./",
   "scope": "./",

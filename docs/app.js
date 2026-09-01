@@ -47,6 +47,19 @@ const els = {
   sendCollected: document.querySelector("#send-collected"),
   exportCollected: document.querySelector("#export-collected"),
   clearCollected: document.querySelector("#clear-collected"),
+  handoffChips: [...document.querySelectorAll(".handoff-chip")],
+  handoffScopeNote: document.querySelector("#handoff-scope-note"),
+  handoffText: document.querySelector("#handoff-text"),
+  copyHandoff: document.querySelector("#copy-handoff"),
+  shareHandoff: document.querySelector("#share-handoff"),
+  handoffStatus: document.querySelector("#handoff-status"),
+  finishHandoff: document.querySelector("#finish-handoff"),
+  mergeText: document.querySelector("#merge-text"),
+  mergePreview: document.querySelector("#merge-preview"),
+  checkMerge: document.querySelector("#check-merge"),
+  applyMerge: document.querySelector("#apply-merge"),
+  clearMerge: document.querySelector("#clear-merge"),
+  mergeStatus: document.querySelector("#merge-status"),
   filterChips: [...document.querySelectorAll(".filter-chip")],
 };
 
@@ -84,7 +97,10 @@ let currentBundle = null;
 let communityLayerGroup = null;
 let buildingLayerGroup = null;
 let dataSource = "packaged";
-let collectedState = { schemaVersion: 1, type: "field-map-collection", lastExportedUtc: null, features: [] };
+let collectedState = FieldMapSync.emptyCollection("");
+let handoffScope = "pending";
+let copiedBlock = "";
+let pendingPacket = null;
 let collectedLayerGroup = null;
 let collectMode = false;
 let draftLatLng = null;
@@ -96,7 +112,6 @@ const DATA_DB_NAME = "field-map-local-data";
 const DATA_STORE_NAME = "updates";
 const ACTIVE_UPDATE_KEY = "active-update";
 const COLLECTED_POINTS_KEY = "collected-points";
-const COLLECTION_SCHEMA_VERSION = 1;
 const COLLECTED_LABEL_MIN_ZOOM = 16;
 const COMMUNITY_LABEL_MAX_ZOOM = 13;
 const ROAD_LABEL_MIN_ZOOM = 14;
@@ -937,50 +952,32 @@ window.addEventListener("appinstalled", () => showToast("Field Map installed"));
 // --- Field collection -------------------------------------------------------
 // Points collected on this device live in their own IndexedDB key, separate
 // from the imported update, so importing or removing an update never touches
-// unsent field work.
+// field work. The rules for exchanging them with other crews live in sync.js.
 
 function collectedStyle() {
   return { pane: "collectedPane", radius: 6, color: "#ffffff", weight: 2, fillColor: "#0f8a7a", fillOpacity: 1 };
 }
 
 function coordinateLabel(latlng) {
-  return `${Number(latlng.lat).toFixed(6)}, ${Number(latlng.lng).toFixed(6)}`;
-}
-
-function collectedPointLabel(address, name, latlng) {
-  return address || name || coordinateLabel(latlng);
-}
-
-function collectedPointSubtitle(feature) {
-  const collected = new Date(feature.properties.collectedUtc || "");
-  const when = Number.isNaN(collected.getTime()) ? "" : ` ${collected.toLocaleDateString([], { dateStyle: "medium" })}`;
-  const name = feature.properties.name;
-  const address = feature.properties.address;
-  const extra = address && name ? ` - ${name}` : "";
-  return `Collected${when}${extra}`;
-}
-
-function normalizeCollectedState(candidate) {
-  const empty = { schemaVersion: COLLECTION_SCHEMA_VERSION, type: "field-map-collection", lastExportedUtc: null, features: [] };
-  if (!candidate || !Array.isArray(candidate.features)) return empty;
-  const features = candidate.features.filter((feature) => {
-    const coordinates = feature?.geometry?.coordinates;
-    return feature?.properties?.id
-      && feature.geometry?.type === "Point"
-      && Array.isArray(coordinates)
-      && coordinates.length >= 2
-      && coordinates.every((value) => Number.isFinite(Number(value)));
-  });
-  return { ...empty, lastExportedUtc: candidate.lastExportedUtc || null, features };
+  return FieldMapSync.coordinateLabel(latlng.lat, latlng.lng);
 }
 
 function collectedFeatureLatLng(feature) {
-  const [longitude, latitude] = feature.geometry.coordinates;
-  return L.latLng(Number(latitude), Number(longitude));
+  return L.latLng(FieldMapSync.featureLatitude(feature), FieldMapSync.featureLongitude(feature));
 }
 
-function unsentCollectedCount() {
-  return collectedState.features.filter((feature) => !feature.properties.exportedUtc).length;
+function pendingHandoffCount() {
+  return FieldMapSync.pendingRecords(collectedState).length;
+}
+
+function plural(count, singular, many) {
+  return `${count.toLocaleString()} ${count === 1 ? singular : many}`;
+}
+
+function shortTime(value) {
+  const date = new Date(value || "");
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
 }
 
 function collectedPopupHtml(properties, latlng) {
@@ -1026,27 +1023,34 @@ function renderCollectedPoint(feature) {
   setLocationLabelMode(layer, false);
 }
 
+// A merge can add, change, and remove points all at once, so the whole layer is
+// rebuilt rather than tracked change by change.
+function renderAllCollectedPoints() {
+  [...collectedLayers.keys()].forEach(removeCollectedLayer);
+  collectedState.features.forEach(renderCollectedPoint);
+}
+
 function updateCollectedPanel() {
   const total = collectedState.features.length;
-  const unsent = unsentCollectedCount();
+  const pending = pendingHandoffCount();
   els.collectedSummary.textContent = total === 0
     ? "No collected points yet"
-    : `${total.toLocaleString()} collected point${total === 1 ? "" : "s"}`;
+    : plural(total, "collected point", "collected points");
 
-  if (total === 0) {
+  if (total === 0 && pending === 0) {
     els.collectedDetail.textContent = "Tap the pin button on the map to add one.";
-  } else if (!collectedState.lastExportedUtc) {
-    els.collectedDetail.textContent = `${unsent.toLocaleString()} not sent yet`;
+  } else if (!collectedState.lastSharedUtc) {
+    els.collectedDetail.textContent = `${plural(pending, "change", "changes")} to hand off - none handed off yet`;
+  } else if (pending === 0) {
+    els.collectedDetail.textContent = `Nothing new since the hand-off on ${shortTime(collectedState.lastSharedUtc)}`;
   } else {
-    const sentNote = `last sent ${new Date(collectedState.lastExportedUtc).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}`;
-    els.collectedDetail.textContent = unsent === 0
-      ? `All points sent - ${sentNote}`
-      : `${unsent.toLocaleString()} not yet sent - ${sentNote}`;
+    els.collectedDetail.textContent = `${plural(pending, "change", "changes")} since the hand-off on ${shortTime(collectedState.lastSharedUtc)}`;
   }
 
   els.sendCollected.disabled = total === 0;
   els.exportCollected.disabled = total === 0;
   els.clearCollected.disabled = total === 0;
+  refreshHandoffText();
   refreshDataSummary();
   refreshSearchAvailability();
 }
@@ -1054,6 +1058,26 @@ function updateCollectedPanel() {
 async function persistCollectedPoints() {
   await writeCollectedPoints(collectedState);
   updateCollectedPanel();
+}
+
+/**
+ * Changes the collection, and puts it back the way it was if the save fails.
+ *
+ * Storage can refuse a write - a full device, private browsing, a locked
+ * profile. Without the rollback the map would show a point that is not on the
+ * phone, which is the one thing a crew must be able to trust.
+ */
+async function commitCollectedChange(mutate) {
+  const snapshot = JSON.parse(JSON.stringify(collectedState));
+  const result = mutate();
+  try {
+    await persistCollectedPoints();
+    return { ok: true, result };
+  } catch (error) {
+    collectedState = snapshot;
+    updateCollectedPanel();
+    return { ok: false, error };
+  }
 }
 
 function setCollectMode(active) {
@@ -1103,52 +1127,35 @@ async function savePointForm() {
     return;
   }
 
-  const now = new Date().toISOString();
-  const existing = editingPointId
-    ? collectedState.features.find((entry) => entry.properties.id === editingPointId)
-    : null;
-  const feature = existing || {
-    type: "Feature",
-    geometry: { type: "Point", coordinates: [Number(draftLatLng.lng), Number(draftLatLng.lat)] },
-    properties: {
-      id: `collected-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      kind: "collected",
-      collectedUtc: now,
-      exportedUtc: null,
-    },
-  };
-
-  feature.properties.address = address;
-  feature.properties.name = name;
-  feature.properties.label = collectedPointLabel(address, name, draftLatLng);
-  feature.properties.updatedUtc = now;
-  feature.properties.subtitle = collectedPointSubtitle(feature);
-  if (existing) feature.properties.exportedUtc = null;
-  else collectedState.features.push(feature);
-
-  try {
-    await persistCollectedPoints();
-  } catch (error) {
-    els.pointStatus.textContent = error.message;
+  const editing = Boolean(editingPointId);
+  const outcome = await commitCollectedChange(() => FieldMapSync.upsertPoint(collectedState, {
+    id: editingPointId || undefined,
+    latitude: draftLatLng.lat,
+    longitude: draftLatLng.lng,
+    address,
+    name,
+  }));
+  if (!outcome.ok) {
+    els.pointStatus.textContent = outcome.error.message;
     return;
   }
 
-  renderCollectedPoint(feature);
+  renderCollectedPoint(outcome.result);
   updateRenderedLabels();
   closePointDialog();
   setCollectMode(false);
-  showToast(existing ? "Point updated" : "Point saved to this device");
+  showToast(editing ? "Point updated" : "Point saved to this device");
 }
 
 async function deleteCollectedPoint(id) {
   const feature = collectedState.features.find((entry) => entry.properties.id === id);
   if (!feature) return;
-  if (!window.confirm(`Delete "${feature.properties.label}" from this device?`)) return;
-  collectedState.features = collectedState.features.filter((entry) => entry.properties.id !== id);
-  try {
-    await persistCollectedPoints();
-  } catch (error) {
-    showToast(error.message);
+  const message = `Delete "${feature.properties.label}"?\n\nIt goes from this device now, and from the crews you hand off to next.`;
+  if (!window.confirm(message)) return;
+
+  const outcome = await commitCollectedChange(() => FieldMapSync.deletePoint(collectedState, id));
+  if (!outcome.ok) {
+    showToast(outcome.error.message);
     return;
   }
   removeCollectedLayer(id);
@@ -1156,6 +1163,218 @@ async function deleteCollectedPoint(id) {
   if (editingPointId === id) closePointDialog();
   showToast("Point deleted");
 }
+
+// --- handing off by text ----------------------------------------------------
+
+// The stamp a still-open hand-off keeps, so copying it again for the next
+// person produces the identical block.
+let handoffStamp = null;
+let handoffStampFor = "";
+
+function openedHandoffUtc(records) {
+  const shape = records.map((record) => `${record.op}${record.id}${record.updatedUtc}`).join("|");
+  if (shape !== handoffStampFor) {
+    handoffStampFor = shape;
+    handoffStamp = new Date().toISOString();
+  }
+  return handoffStamp;
+}
+
+function refreshHandoffText() {
+  if (!els.handoffText) return;
+  const full = handoffScope === "full";
+  const records = FieldMapSync.pendingRecords(collectedState, { full });
+  const empty = records.length === 0;
+
+  els.handoffScopeNote.textContent = full
+    ? "Every point on this phone. Use this for a phone joining the rotation, or when a hand-off never arrived."
+    : "Only what you have changed since you last handed off.";
+
+  els.handoffText.classList.toggle("empty", empty);
+  const block = empty ? "" : FieldMapSync.encodePacket({
+    deviceId: collectedState.deviceId,
+    records,
+    // Hold the time still while a hand-off is open, so re-copying it for the
+    // next person gives the same block rather than a new one.
+    generatedUtc: openedHandoffUtc(records),
+  });
+  els.handoffText.value = empty
+    ? (full
+      ? "There is nothing on this device to hand off yet."
+      : "Nothing new since your last hand-off was closed.")
+    : block;
+
+  els.copyHandoff.disabled = empty;
+  els.shareHandoff.disabled = empty;
+
+  // A block stays on screen after it is copied, because a crew rarely hands to
+  // one person. Both people going off shift send to whoever is coming on, and
+  // that person passes the same block to their partner and to the crew after
+  // them. Clearing it at the first copy would leave the second and third
+  // recipient with nothing but the whole map to re-send.
+  const sent = Boolean(copiedBlock) && copiedBlock === els.handoffText.value;
+  els.finishHandoff.hidden = empty || !sent;
+}
+
+/**
+ * Closes the current hand-off, so the next one starts from here.
+ *
+ * Deliberately a separate tap rather than something Copy does. The app cannot
+ * tell whether the block reached one person or four, and guessing wrong the
+ * unsafe way means work that was never delivered stops being offered.
+ */
+async function finishHandoff() {
+  const counted = pendingHandoffCount();
+  const outcome = await commitCollectedChange(() => FieldMapSync.markShared(collectedState));
+  if (!outcome.ok) {
+    els.handoffStatus.textContent = outcome.error.message;
+    return;
+  }
+  copiedBlock = "";
+  els.handoffStatus.textContent = `Hand-off closed - ${plural(counted, "change", "changes")}. The next one starts from here.`;
+  showToast("Hand-off closed");
+}
+
+function afterHandoffCopy(text, note) {
+  copiedBlock = text;
+  const counted = FieldMapSync.pendingRecords(collectedState, { full: handoffScope === "full" }).length;
+  els.handoffStatus.textContent = `${plural(counted, "change", "changes")} ${note} The same block works for everyone taking over - send it to all of them.`;
+  refreshHandoffText();
+}
+
+async function copyHandoffText() {
+  if (els.copyHandoff.disabled) return;
+  const text = els.handoffText.value;
+  if (!(await copyText(text))) {
+    els.handoffStatus.textContent = "Copy is unavailable in this browser. Select the text above and copy it by hand.";
+    return;
+  }
+  afterHandoffCopy(text, "copied.");
+  showToast("Hand-off text copied");
+}
+
+async function shareHandoffText() {
+  if (els.shareHandoff.disabled) return;
+  const text = els.handoffText.value;
+  if (navigator.share) {
+    try {
+      await navigator.share({ title: "Field Map hand-off", text });
+      afterHandoffCopy(text, "sent.");
+      return;
+    } catch (error) {
+      if (error?.name === "AbortError") return;
+    }
+  }
+  if (!(await copyText(text))) {
+    els.handoffStatus.textContent = "Sharing is unavailable here. Select the text above and copy it by hand.";
+    return;
+  }
+  afterHandoffCopy(text, "copied, because sharing is unavailable here.");
+  showToast("Hand-off text copied");
+}
+
+function setHandoffScope(scope) {
+  handoffScope = scope;
+  els.handoffChips.forEach((chip) => chip.classList.toggle("active", chip.dataset.scope === scope));
+  els.handoffStatus.textContent = "";
+  refreshHandoffText();
+}
+
+// --- taking a hand-off ------------------------------------------------------
+
+function resetMergePreview() {
+  pendingPacket = null;
+  els.mergePreview.hidden = true;
+  els.mergePreview.replaceChildren();
+  els.applyMerge.disabled = true;
+  els.clearMerge.hidden = true;
+}
+
+function mergeRow(count, singular, many, quiet = false) {
+  if (!count) return "";
+  return `<li${quiet ? ' class="quiet"' : ""}><span class="merge-count">${count.toLocaleString()}</span><span>${count === 1 ? singular : many}</span></li>`;
+}
+
+function renderMergePreview(packet, plan) {
+  const summary = FieldMapSync.summarizePlan(plan);
+  const from = packet.origin ? `From ${escapeHtml(packet.origin)}` : "From another device";
+  const when = packet.generatedUtc ? ` - ${escapeHtml(shortTime(packet.generatedUtc))}` : "";
+
+  const rows = [
+    mergeRow(summary.added, "new point", "new points"),
+    mergeRow(summary.updated, "point updated", "points updated"),
+    mergeRow(summary.removed, "point removed", "points removed"),
+    mergeRow(summary.unchanged, "you already have", "you already have", true),
+    mergeRow(summary.stale, "older than yours, ignored", "older than yours, ignored", true),
+  ].filter(Boolean).join("");
+
+  const flags = [];
+  if (summary.duplicates) {
+    const examples = plan.duplicates.slice(0, 3)
+      .map((entry) => escapeHtml(entry.existing))
+      .join(", ");
+    flags.push(`${plural(summary.duplicates, "new point lands", "new points land")} within ${FieldMapSync.DUPLICATE_RADIUS_METRES} m of one you already have (${examples}${summary.duplicates > 3 ? ", and more" : ""}). They will be added; check them on the map and delete whichever is wrong.`);
+  }
+  packet.warnings.forEach((warning) => flags.push(escapeHtml(warning)));
+
+  // A hand-off that changes nothing is the normal result of two crews who are
+  // already in step. Say so, rather than leaving a greyed-out button to explain
+  // itself.
+  const nothingNew = summary.changes === 0
+    ? '<p class="merge-nothing">Nothing in this hand-off is new to you. Your map is already up to date.</p>'
+    : "";
+
+  els.mergePreview.innerHTML = `<span class="merge-from">${from}${when}</span>
+    ${nothingNew}
+    ${rows ? `<ul>${rows}</ul>` : ""}
+    ${flags.map((flag) => `<p class="merge-flag">${flag}</p>`).join("")}`;
+  els.mergePreview.hidden = false;
+}
+
+function checkMergeText() {
+  els.mergeStatus.textContent = "";
+  const packet = FieldMapSync.decodePacket(els.mergeText.value);
+  if (!packet.ok) {
+    resetMergePreview();
+    els.mergeStatus.textContent = packet.error;
+    return;
+  }
+  const plan = FieldMapSync.planMerge(collectedState, packet);
+  pendingPacket = packet;
+  renderMergePreview(packet, plan);
+  els.applyMerge.disabled = FieldMapSync.summarizePlan(plan).changes === 0;
+  els.clearMerge.hidden = false;
+}
+
+async function applyPendingMerge() {
+  if (!pendingPacket) {
+    checkMergeText();
+    return;
+  }
+  const packet = pendingPacket;
+  const outcome = await commitCollectedChange(() => FieldMapSync.applyMerge(collectedState, packet));
+  if (!outcome.ok) {
+    els.mergeStatus.textContent = outcome.error.message;
+    return;
+  }
+
+  renderAllCollectedPoints();
+  updateRenderedLabels();
+  const summary = outcome.result.summary;
+  const parts = [];
+  if (summary.added) parts.push(plural(summary.added, "point added", "points added"));
+  if (summary.updated) parts.push(plural(summary.updated, "point updated", "points updated"));
+  if (summary.removed) parts.push(plural(summary.removed, "point removed", "points removed"));
+
+  els.mergeText.value = "";
+  resetMergePreview();
+  els.mergeStatus.textContent = parts.length
+    ? `Merged: ${parts.join(", ")}. These travel on in your next hand-off.`
+    : "Merged. Nothing in it was new to you.";
+  showToast(parts.length ? "Hand-off merged" : "Nothing new in that hand-off");
+}
+
+// --- files, for the office --------------------------------------------------
 
 function collectedFileName() {
   return `field-map-collected-${new Date().toISOString().slice(0, 10)}.geojson`;
@@ -1167,22 +1386,14 @@ function makeCollectedFile() {
     type: "FeatureCollection",
     features: collectedState.features,
     fieldMap: {
-      type: "field-map-collection",
-      schemaVersion: COLLECTION_SCHEMA_VERSION,
+      type: FieldMapSync.COLLECTION_TYPE,
+      schemaVersion: FieldMapSync.COLLECTION_SCHEMA_VERSION,
+      device: collectedState.deviceId,
       generatedUtc: new Date().toISOString(),
       count: collectedState.features.length,
     },
   };
   return new File([JSON.stringify(payload)], collectedFileName(), { type: "application/geo+json" });
-}
-
-async function markCollectedExported() {
-  const now = new Date().toISOString();
-  collectedState.features.forEach((feature) => {
-    feature.properties.exportedUtc = feature.properties.exportedUtc || now;
-  });
-  collectedState.lastExportedUtc = now;
-  await persistCollectedPoints();
 }
 
 async function sendCollectedPoints() {
@@ -1195,7 +1406,6 @@ async function sendCollectedPoints() {
           text: "Collected points from the field.",
           files: [file],
         });
-        await markCollectedExported();
         els.collectedStatus.textContent = "Collected points sent. They stay on this device too.";
         return;
       } catch (error) {
@@ -1203,7 +1413,6 @@ async function sendCollectedPoints() {
       }
     }
     downloadUpdateFile(file);
-    await markCollectedExported();
     els.collectedStatus.textContent = "Collected points saved. Attach the file to a text, email, or Teams message.";
     showToast("Collected points file saved");
   } catch (error) {
@@ -1214,7 +1423,6 @@ async function sendCollectedPoints() {
 async function saveCollectedFile() {
   try {
     downloadUpdateFile(makeCollectedFile());
-    await markCollectedExported();
     els.collectedStatus.textContent = "Collected points saved to this device.";
     showToast("Collected points file saved");
   } catch (error) {
@@ -1222,34 +1430,54 @@ async function saveCollectedFile() {
   }
 }
 
+/**
+ * Wipes this device's collection.
+ *
+ * Deliberately not the same thing as deleting the points one by one: this
+ * leaves no removals behind, so it clears this phone without reaching into
+ * anybody else's. Taking a hand-off afterwards fills it back up.
+ */
 async function clearCollectedPoints() {
-  const unsent = unsentCollectedCount();
-  const message = unsent > 0
-    ? `${unsent} collected point${unsent === 1 ? " has" : "s have"} not been sent yet. Delete every collected point from this device anyway?`
-    : "Delete every collected point from this device?";
-  if (!window.confirm(message)) return;
-  collectedState.features = [];
-  collectedState.lastExportedUtc = null;
-  try {
-    await persistCollectedPoints();
-  } catch (error) {
-    els.collectedStatus.textContent = error.message;
+  const pending = pendingHandoffCount();
+  const warning = pending > 0
+    ? `${plural(pending, "change has", "changes have")} not been handed off yet and will be lost. `
+    : "";
+  if (!window.confirm(`${warning}Remove every collected point from this device? Other crews keep theirs - this does not delete anything for them.`)) return;
+
+  const outcome = await commitCollectedChange(() => {
+    collectedState = FieldMapSync.emptyCollection(collectedState.deviceId);
+  });
+  if (!outcome.ok) {
+    els.collectedStatus.textContent = outcome.error.message;
     return;
   }
-  [...collectedLayers.keys()].forEach(removeCollectedLayer);
+  renderAllCollectedPoints();
+  resetMergePreview();
   els.collectedStatus.textContent = "Collected points removed from this device.";
   showToast("Collected points cleared");
 }
 
 async function loadCollectedPoints() {
   collectedLayerGroup = L.layerGroup().addTo(map);
+  let stored = null;
   try {
-    collectedState = normalizeCollectedState(await readCollectedPoints());
+    stored = await readCollectedPoints();
   } catch (error) {
     console.warn("Collected points could not be read", error);
-    collectedState = normalizeCollectedState(null);
   }
-  collectedState.features.forEach(renderCollectedPoint);
+
+  collectedState = FieldMapSync.normalizeCollection(stored);
+  // First run on this phone, or points carried over from an older version:
+  // write the upgraded shape back before anything else touches it.
+  if (JSON.stringify(collectedState) !== JSON.stringify(stored)) {
+    try {
+      await writeCollectedPoints(collectedState);
+    } catch (error) {
+      console.warn("Collected points could not be saved", error);
+    }
+  }
+
+  renderAllCollectedPoints();
   updateCollectedPanel();
   updateRenderedLabels();
 }
@@ -1279,6 +1507,23 @@ els.deletePoint.addEventListener("click", () => {
 els.sendCollected.addEventListener("click", sendCollectedPoints);
 els.exportCollected.addEventListener("click", saveCollectedFile);
 els.clearCollected.addEventListener("click", clearCollectedPoints);
+
+els.handoffChips.forEach((chip) => chip.addEventListener("click", () => setHandoffScope(chip.dataset.scope)));
+els.copyHandoff.addEventListener("click", copyHandoffText);
+els.shareHandoff.addEventListener("click", shareHandoffText);
+els.finishHandoff.addEventListener("click", finishHandoff);
+els.handoffText.addEventListener("focus", () => els.handoffText.select());
+els.checkMerge.addEventListener("click", checkMergeText);
+els.applyMerge.addEventListener("click", applyPendingMerge);
+els.clearMerge.addEventListener("click", () => {
+  els.mergeText.value = "";
+  els.mergeStatus.textContent = "";
+  resetMergePreview();
+});
+els.mergeText.addEventListener("input", () => {
+  if (pendingPacket) resetMergePreview();
+  els.mergeStatus.textContent = "";
+});
 
 async function loadMapData() {
   try {

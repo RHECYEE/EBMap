@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#173f35" />
-    <meta name="description" content="Search communities, roads, addresses, saved locations, and official mile markers, then tap a house to navigate." />
+    <meta name="description" content="Search communities, roads, addresses, saved locations, and official mile markers, then tap a house to navigate. Collect points in the field and hand them to the next crew as pasted text." />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Field Map" />
@@ -14,7 +14,7 @@
     <link rel="icon" href="./assets/app-icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="./assets/app-icon-192.png" />
     <link rel="stylesheet" href="./vendor/leaflet/leaflet.css" />
-    <link rel="stylesheet" href="./styles.css?v=collect-1" />
+    <link rel="stylesheet" href="./styles.css?v=handoff-1" />
   </head>
   <body>
     <main id="map" aria-label="Interactive field map"></main>
@@ -127,10 +127,44 @@
           <strong id="collected-summary">No collected points yet</strong>
           <span id="collected-detail">Tap the pin button on the map to add one.</span>
         </div>
+
+        <div class="handoff">
+          <h4>Hand off to the next crew</h4>
+          <p class="handoff-note">Copy this block into a text or an email. Whoever gets it pastes it below on their own phone and their map catches up with yours. No computer needed.</p>
+          <div class="handoff-choice" role="group" aria-label="What to include in the hand-off">
+            <button class="handoff-chip active" type="button" data-scope="pending">Since last hand-off</button>
+            <button class="handoff-chip" type="button" data-scope="full">Everything</button>
+          </div>
+          <p id="handoff-scope-note" class="handoff-note handoff-scope-note">Only what you have changed since you last handed off.</p>
+          <textarea id="handoff-text" class="handoff-text" rows="5" readonly aria-label="Hand-off text to copy"></textarea>
+          <div class="field-actions handoff-actions">
+            <button id="copy-handoff" class="primary" type="button">Copy</button>
+            <button id="share-handoff" type="button">Send</button>
+          </div>
+          <p id="handoff-status" class="data-status" role="status" aria-live="polite"></p>
+          <button id="finish-handoff" class="handoff-finish" type="button" hidden>
+            <strong>Everyone has it - start a new hand-off</strong>
+            <span>Clears this block. Only tap it once the whole oncoming crew has been sent it.</span>
+          </button>
+        </div>
+
+        <div class="handoff">
+          <h4>Take a hand-off</h4>
+          <p class="handoff-note">Paste what you were sent. Nothing on this phone changes until you have seen what it does.</p>
+          <textarea id="merge-text" class="handoff-text" rows="4" placeholder="Paste the hand-off text here" aria-label="Hand-off text you received"></textarea>
+          <div id="merge-preview" class="merge-preview" hidden></div>
+          <div class="field-actions handoff-actions">
+            <button id="clear-merge" class="danger-soft" type="button" hidden>Discard</button>
+            <button id="check-merge" type="button">Check</button>
+            <button id="apply-merge" class="primary" type="button" disabled>Merge</button>
+          </div>
+          <p id="merge-status" class="data-status" role="status" aria-live="polite"></p>
+        </div>
+
         <div class="data-action-list">
           <button id="send-collected" type="button">
-            <strong>Send collected points</strong>
-            <span>Text or email the collected points only</span>
+            <strong>Send a collected points file</strong>
+            <span>A .geojson of the collected points, for the office</span>
           </button>
           <button id="export-collected" type="button">
             <strong>Save collected file</strong>
@@ -179,6 +213,7 @@
 
     <noscript>This map requires JavaScript.</noscript>
     <script src="./vendor/leaflet/leaflet.js"></script>
-    <script src="./app.js?v=collect-1" defer></script>
+    <script src="./sync.js?v=handoff-1" defer></script>
+    <script src="./app.js?v=handoff-1" defer></script>
   </body>
 </html>

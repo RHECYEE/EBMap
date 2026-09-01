@@ -1,5 +1,10 @@
+# Everything is excluded by default so that no map data, address list, or
+# .fieldmap.json update can be committed by accident. Add to this list only
+# code, never data.
 *
 !.gitignore
 !README.md
 !docs/
 !docs/**
+!tests/
+!tests/*.js
