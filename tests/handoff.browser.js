@@ -106,8 +106,14 @@ const stateOf = (phone) => phone.page.evaluate(() => JSON.parse(JSON.stringify(c
   ], [true, 5, true]);
   await me.page.click("#copy-handoff");
   await me.page.waitForTimeout(150);
-  check("copying marks it handed off", await me.page.inputValue("#handoff-text"), "Nothing has changed since your last hand-off.");
-  check("copy is now disabled", await me.page.isDisabled("#copy-handoff"), true);
+  // The block stays put: both people going off shift send to whoever is coming
+  // on, and that person passes the same text to their partner and the crew
+  // after them. It only clears when a person says everyone has it.
+  check("the block survives being copied, for the next recipient", await me.page.inputValue("#handoff-text"), block);
+  check("copy is still available", await me.page.isDisabled("#copy-handoff"), false);
+  await me.page.click("#finish-handoff");
+  await me.page.waitForTimeout(200);
+  check("closing it empties the block", await me.page.inputValue("#handoff-text"), "Nothing new since your last hand-off was closed.");
   await closeData(me);
 
   console.log("\n== Johnny pastes it in and checks before merging ==");
@@ -151,7 +157,9 @@ const stateOf = (phone) => phone.page.evaluate(() => JSON.parse(JSON.stringify(c
   ], [7, 1, 5]);
   await johnny.page.click("#copy-handoff");
   await johnny.page.waitForTimeout(150);
-  check("and now he has nothing left to hand off", await johnny.page.inputValue("#handoff-text"), "Nothing has changed since your last hand-off.");
+  await johnny.page.click("#finish-handoff");
+  await johnny.page.waitForTimeout(200);
+  check("once he closes it, he has nothing left to hand off", await johnny.page.inputValue("#handoff-text"), "Nothing new since your last hand-off was closed.");
   await closeData(johnny);
 
   console.log("\n== I take his hand-off ==");
@@ -180,7 +188,9 @@ const stateOf = (phone) => phone.page.evaluate(() => JSON.parse(JSON.stringify(c
   check("I carry his work onward once", (onward.match(/^\+ /gm) || []).length, 2);
   await me.page.click("#copy-handoff");
   await me.page.waitForTimeout(150);
-  check("and then there is nothing left to send", await me.page.inputValue("#handoff-text"), "Nothing has changed since your last hand-off.");
+  await me.page.click("#finish-handoff");
+  await me.page.waitForTimeout(200);
+  check("and then there is nothing left to send", await me.page.inputValue("#handoff-text"), "Nothing new since your last hand-off was closed.");
 
   console.log("\n== swapping again with nothing new costs nothing ==");
   const settled = await me.page.evaluate(() => FieldMapSync.encodePacket({

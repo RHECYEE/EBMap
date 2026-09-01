@@ -224,6 +224,11 @@ body.collect-mode .leaflet-container { cursor: crosshair; }
 .handoff-actions { margin-top: 10px; }
 .handoff-actions button:disabled { cursor: not-allowed; opacity: 0.45; }
 
+.handoff-finish { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; width: 100%; margin-top: 4px; padding: 11px 13px; border: 1px solid var(--line); border-radius: 12px; color: var(--ink); text-align: left; background: white; cursor: pointer; }
+.handoff-finish:hover, .handoff-finish:focus-visible { outline: 0; border-color: var(--green); background: #f4f8f6; }
+.handoff-finish strong { font-size: 13px; }
+.handoff-finish span { color: var(--muted); font-size: 11px; }
+
 .merge-preview { margin-top: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: white; font-size: 12px; }
 .merge-preview .merge-from { display: block; margin-bottom: 8px; color: var(--muted); font-size: 11px; font-weight: 700; }
 .merge-preview ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 5px; }

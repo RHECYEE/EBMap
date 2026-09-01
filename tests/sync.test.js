@@ -636,3 +636,121 @@ test("an author mark is optional, and an address is never mistaken for one", () 
   assert.equal(sync.readAuthor("@AAAAA"), "AAAAA");
   assert.equal(sync.readAuthor("12345"), "");
 });
+
+// --- a whole week, with points inherited from a third crew -------------------
+
+function idsOf(state) {
+  return state.features.map((feature) => feature.properties.id).sort();
+}
+
+function duplicateIds(state) {
+  const seen = new Set();
+  return state.features.map((feature) => feature.properties.id)
+    .filter((id) => (seen.has(id) ? true : (seen.add(id), false)));
+}
+
+function weekWithInheritedPoints() {
+  const you = device("R4T9K");
+  const johnny = device("J8M2P");
+  const coworker = device("W1XQ8");
+
+  // Monday: a third crew hands both of you the same twenty.
+  for (let index = 0; index < 20; index += 1) {
+    addPoint(coworker, {
+      latitude: 45.10 + index * 0.004,
+      longitude: -101.30 + index * 0.006,
+      address: `${100 + index * 7} County Rd`,
+    }, "2026-08-31T07:10:00.000Z");
+  }
+  const monday = handOff(coworker, { now: "2026-08-31T08:00:00.000Z" });
+  receive(you, monday, "2026-08-31T08:05:00.000Z");
+  receive(johnny, monday, "2026-08-31T08:06:00.000Z");
+
+  // Tuesday: you collect five, Johnny three, one of his on a driveway you
+  // already pinned.
+  ["1409 W Main St", "1412 W Main St", "220 Cutbank Rd", "18 Ridge Access", "77 Mile Rd"]
+    .forEach((address, index) => addPoint(you, {
+      latitude: 45.17 + index * 0.008, longitude: -101.24 - index * 0.006, address,
+    }, `2026-09-01T08:${String(10 + index * 6).padStart(2, "0")}:00.000Z`));
+  addPoint(johnny, { latitude: 45.22400, longitude: -101.18800, address: "310 Coulee Rd" }, "2026-09-01T09:05:00.000Z");
+  addPoint(johnny, { latitude: 45.14100, longitude: -101.29500, address: "412 Section Line Rd" }, "2026-09-01T09:20:00.000Z");
+  addPoint(johnny, { latitude: 45.17002, longitude: -101.24004, address: "1409 West Main Street", name: "big green barn" }, "2026-09-01T09:41:00.000Z");
+
+  return { you, johnny, coworker };
+}
+
+test("the twenty inherited points do not turn into duplicates", () => {
+  const { you, johnny } = weekWithInheritedPoints();
+  const inherited = (state) => idsOf(state).filter((id) => id.startsWith("W1XQ8-"));
+  assert.equal(inherited(you).length, 20);
+  assert.deepEqual(inherited(you), inherited(johnny), "you both hold the same twenty records, under the same ids");
+
+  const yours = handOff(you, { now: "2026-09-01T17:00:00.000Z" });
+  const { summary } = receive(johnny, yours, "2026-09-01T17:05:00.000Z");
+
+  assert.equal(summary.added, 5);
+  assert.equal(summary.duplicates, 1, "only the driveway you both pinned is flagged");
+  assert.equal(johnny.features.length, 28);
+  assert.deepEqual(duplicateIds(johnny), [], "no record appears twice");
+});
+
+test("a week of swapping leaves both crews with the same map and no losses", () => {
+  const { you, johnny } = weekWithInheritedPoints();
+  receive(johnny, handOff(you, { now: "2026-09-01T17:00:00.000Z" }), "2026-09-01T17:05:00.000Z");
+
+  const duplicate = johnny.features.find((feature) => feature.properties.label === "1409 West Main Street");
+  sync.deletePoint(johnny, duplicate.properties.id, "2026-09-01T17:12:00.000Z");
+  receive(you, handOff(johnny, { now: "2026-09-01T17:15:00.000Z" }), "2026-09-01T17:20:00.000Z");
+
+  assert.equal(you.features.length, 27, "20 inherited + your 5 + his 3, less the one duplicate removed");
+  assert.deepEqual(idsOf(you), idsOf(johnny));
+  assert.deepEqual(duplicateIds(you), []);
+  assert.deepEqual(labels(you).filter((label) => /1409/.test(label)), ["1409 W Main St"], "one pin on that driveway, not two");
+});
+
+test("pasting the same block again, or a full re-send, changes nothing", () => {
+  const { you, johnny, coworker } = weekWithInheritedPoints();
+  const yours = handOff(you, { now: "2026-09-01T17:00:00.000Z" });
+  receive(johnny, yours, "2026-09-01T17:05:00.000Z");
+  const before = johnny.features.length;
+
+  const again = receive(johnny, yours, "2026-09-01T17:06:00.000Z");
+  assert.equal(again.summary.changes, 0, "a second paste of the same text is a no-op");
+  assert.equal(johnny.features.length, before);
+
+  const everything = sync.encodePacket({
+    deviceId: coworker.deviceId,
+    records: sync.pendingRecords(coworker, { full: true }),
+    generatedUtc: "2026-09-07T08:00:00.000Z",
+  });
+  const resent = receive(johnny, everything, "2026-09-07T08:05:00.000Z");
+  assert.equal(resent.summary.changes, 0, "the coworker re-sending the lot adds nothing");
+  assert.equal(johnny.features.length, before);
+  assert.deepEqual(duplicateIds(johnny), []);
+});
+
+// --- one block, several recipients ------------------------------------------
+
+test("one block can be handed to several people, and stays valid until closed", () => {
+  const outgoing = device("AAAAA");
+  addPoint(outgoing, { latitude: 45.10, longitude: -101.20, address: "one" }, "2026-09-01T14:00:00.000Z");
+  addPoint(outgoing, { latitude: 45.11, longitude: -101.21, address: "two" }, "2026-09-01T14:05:00.000Z");
+
+  // Copying does not close the hand-off, so the same text serves everybody.
+  const records = sync.pendingRecords(outgoing);
+  const text = sync.encodePacket({ deviceId: outgoing.deviceId, records, generatedUtc: "2026-09-01T15:00:00.000Z" });
+  assert.equal(sync.pendingRecords(outgoing).length, 2, "still on offer after being copied");
+
+  const crew = [device("BBBBB"), device("CCCCC"), device("DDDDD")];
+  crew.forEach((phone) => receive(phone, text, "2026-09-01T15:05:00.000Z"));
+  crew.forEach((phone) => assert.deepEqual(labels(phone), ["one", "two"], `${phone.deviceId} got the lot`));
+
+  // Work collected before it is closed joins the same block, so a late
+  // recipient is not left short.
+  addPoint(outgoing, { latitude: 45.12, longitude: -101.22, address: "three" }, "2026-09-01T15:30:00.000Z");
+  const grown = sync.pendingRecords(outgoing);
+  assert.equal(grown.length, 3, "the earlier two are still in it");
+
+  sync.markShared(outgoing, "2026-09-01T16:00:00.000Z");
+  assert.equal(sync.pendingRecords(outgoing).length, 0, "closing it starts the next one from here");
+});

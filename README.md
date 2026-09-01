@@ -26,15 +26,25 @@ server, no account.
 **To hand over**, open **Data → Hand off to the next crew**, tap **Copy**, and paste the block into a
 text or an email. **Send** offers the phone's own share sheet instead.
 
+The block stays on screen after you copy it, because a hand-off is rarely to one person. Both crews
+going off shift send to whoever is coming on, and that person passes the same text to their partner
+and to the pair after them. Send it to as many people as you need - it is the same block every time.
+When the whole crew has it, tap **Everyone has it - start a new hand-off**; until you do, anything
+else you collect joins the same block, so nobody who gets it late is left short.
+
 **To take one**, paste what you were sent into **Take a hand-off** and tap **Check**. The panel says
 what the block would do - how many points are new, changed, or removed - before anything on the phone
 changes. Tap **Merge** to apply it.
 
 A few things worth knowing:
 
-- **Only what is new goes out.** The block carries what you have changed since your last hand-off, so
-  the hundredth swap is as small as the first. Switch to **Everything** for a phone joining the
-  rotation, or when a message never arrived.
+- **Only what is new goes out.** The block carries what you have changed since you last closed a
+  hand-off, so the hundredth swap is as small as the first. Switch to **Everything** for a phone
+  joining the rotation, or when a message never arrived.
+- **Points are never duplicated by being sent twice.** A point keeps the same identity wherever it
+  travels, so pasting the same block again, or taking the same points from two different people,
+  changes nothing and adds nothing to the search. Only two crews independently pinning the same place
+  makes two points, and the merge panel flags that so somebody can delete one.
 - **Points travel down a chain.** A point you took from one crew goes out in your next hand-off, so
   it reaches the crew after them without anyone forwarding anything by hand. It only travels once:
   after that it is settled and stops appearing.
@@ -96,6 +106,8 @@ are separate from the suite above:
 
 ```
 npx http-server docs -p 8099 -s &
-node tests/handoff.browser.js    # two phones collecting and handing off by text
-node tests/upgrade.browser.js    # a phone that already has points opening this version
+node tests/handoff.browser.js     # two phones collecting and handing off by text
+node tests/fanout.browser.js      # one block handed to a partner and the next crew
+node tests/duplicates.browser.js  # repeated merges must not fill up the search
+node tests/upgrade.browser.js     # a phone that already has points opening this version
 ```

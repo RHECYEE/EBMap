@@ -53,6 +53,7 @@ const els = {
   copyHandoff: document.querySelector("#copy-handoff"),
   shareHandoff: document.querySelector("#share-handoff"),
   handoffStatus: document.querySelector("#handoff-status"),
+  finishHandoff: document.querySelector("#finish-handoff"),
   mergeText: document.querySelector("#merge-text"),
   mergePreview: document.querySelector("#merge-preview"),
   checkMerge: document.querySelector("#check-merge"),
@@ -98,6 +99,7 @@ let buildingLayerGroup = null;
 let dataSource = "packaged";
 let collectedState = FieldMapSync.emptyCollection("");
 let handoffScope = "pending";
+let copiedBlock = "";
 let pendingPacket = null;
 let collectedLayerGroup = null;
 let collectMode = false;
@@ -1164,6 +1166,20 @@ async function deleteCollectedPoint(id) {
 
 // --- handing off by text ----------------------------------------------------
 
+// The stamp a still-open hand-off keeps, so copying it again for the next
+// person produces the identical block.
+let handoffStamp = null;
+let handoffStampFor = "";
+
+function openedHandoffUtc(records) {
+  const shape = records.map((record) => `${record.op}${record.id}${record.updatedUtc}`).join("|");
+  if (shape !== handoffStampFor) {
+    handoffStampFor = shape;
+    handoffStamp = new Date().toISOString();
+  }
+  return handoffStamp;
+}
+
 function refreshHandoffText() {
   if (!els.handoffText) return;
   const full = handoffScope === "full";
@@ -1175,60 +1191,85 @@ function refreshHandoffText() {
     : "Only what you have changed since you last handed off.";
 
   els.handoffText.classList.toggle("empty", empty);
+  const block = empty ? "" : FieldMapSync.encodePacket({
+    deviceId: collectedState.deviceId,
+    records,
+    // Hold the time still while a hand-off is open, so re-copying it for the
+    // next person gives the same block rather than a new one.
+    generatedUtc: openedHandoffUtc(records),
+  });
   els.handoffText.value = empty
     ? (full
       ? "There is nothing on this device to hand off yet."
-      : "Nothing has changed since your last hand-off.")
-    : FieldMapSync.encodePacket({ deviceId: collectedState.deviceId, records });
+      : "Nothing new since your last hand-off was closed.")
+    : block;
 
   els.copyHandoff.disabled = empty;
   els.shareHandoff.disabled = empty;
+
+  // A block stays on screen after it is copied, because a crew rarely hands to
+  // one person. Both people going off shift send to whoever is coming on, and
+  // that person passes the same block to their partner and to the crew after
+  // them. Clearing it at the first copy would leave the second and third
+  // recipient with nothing but the whole map to re-send.
+  const sent = Boolean(copiedBlock) && copiedBlock === els.handoffText.value;
+  els.finishHandoff.hidden = empty || !sent;
 }
 
-async function markHandedOff() {
+/**
+ * Closes the current hand-off, so the next one starts from here.
+ *
+ * Deliberately a separate tap rather than something Copy does. The app cannot
+ * tell whether the block reached one person or four, and guessing wrong the
+ * unsafe way means work that was never delivered stops being offered.
+ */
+async function finishHandoff() {
+  const counted = pendingHandoffCount();
   const outcome = await commitCollectedChange(() => FieldMapSync.markShared(collectedState));
   if (!outcome.ok) {
-    els.handoffStatus.textContent = `Sent, but this device could not record it: ${outcome.error.message}`;
-    return false;
+    els.handoffStatus.textContent = outcome.error.message;
+    return;
   }
-  return true;
+  copiedBlock = "";
+  els.handoffStatus.textContent = `Hand-off closed - ${plural(counted, "change", "changes")}. The next one starts from here.`;
+  showToast("Hand-off closed");
+}
+
+function afterHandoffCopy(text, note) {
+  copiedBlock = text;
+  const counted = FieldMapSync.pendingRecords(collectedState, { full: handoffScope === "full" }).length;
+  els.handoffStatus.textContent = `${plural(counted, "change", "changes")} ${note} The same block works for everyone taking over - send it to all of them.`;
+  refreshHandoffText();
 }
 
 async function copyHandoffText() {
   if (els.copyHandoff.disabled) return;
   const text = els.handoffText.value;
-  const copied = await copyText(text);
-  if (!copied) {
+  if (!(await copyText(text))) {
     els.handoffStatus.textContent = "Copy is unavailable in this browser. Select the text above and copy it by hand.";
     return;
   }
-  const counted = FieldMapSync.pendingRecords(collectedState, { full: handoffScope === "full" }).length;
-  if (!(await markHandedOff())) return;
-  els.handoffStatus.textContent = `${plural(counted, "change", "changes")} copied. Paste it into your text or email now.`;
+  afterHandoffCopy(text, "copied.");
   showToast("Hand-off text copied");
 }
 
 async function shareHandoffText() {
   if (els.shareHandoff.disabled) return;
   const text = els.handoffText.value;
-  const counted = FieldMapSync.pendingRecords(collectedState, { full: handoffScope === "full" }).length;
   if (navigator.share) {
     try {
       await navigator.share({ title: "Field Map hand-off", text });
-      if (!(await markHandedOff())) return;
-      els.handoffStatus.textContent = `${plural(counted, "change", "changes")} sent.`;
+      afterHandoffCopy(text, "sent.");
       return;
     } catch (error) {
       if (error?.name === "AbortError") return;
     }
   }
-  const copied = await copyText(text);
-  if (!copied) {
+  if (!(await copyText(text))) {
     els.handoffStatus.textContent = "Sharing is unavailable here. Select the text above and copy it by hand.";
     return;
   }
-  if (!(await markHandedOff())) return;
-  els.handoffStatus.textContent = `Sharing is unavailable here, so the ${plural(counted, "change was", "changes were")} copied instead.`;
+  afterHandoffCopy(text, "copied, because sharing is unavailable here.");
   showToast("Hand-off text copied");
 }
 
@@ -1470,6 +1511,7 @@ els.clearCollected.addEventListener("click", clearCollectedPoints);
 els.handoffChips.forEach((chip) => chip.addEventListener("click", () => setHandoffScope(chip.dataset.scope)));
 els.copyHandoff.addEventListener("click", copyHandoffText);
 els.shareHandoff.addEventListener("click", shareHandoffText);
+els.finishHandoff.addEventListener("click", finishHandoff);
 els.handoffText.addEventListener("focus", () => els.handoffText.select());
 els.checkMerge.addEventListener("click", checkMergeText);
 els.applyMerge.addEventListener("click", applyPendingMerge);
