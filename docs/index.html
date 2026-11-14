@@ -14,7 +14,7 @@
     <link rel="icon" href="./assets/app-icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="./assets/app-icon-192.png" />
     <link rel="stylesheet" href="./vendor/leaflet/leaflet.css" />
-    <link rel="stylesheet" href="./styles.css?v=handoff-1" />
+    <link rel="stylesheet" href="./styles.css?v=vsid-1" />
   </head>
   <body>
     <main id="map" aria-label="Interactive field map"></main>
@@ -36,7 +36,7 @@
 
       <div class="search-box">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m20.5 19-4.4-4.4a7 7 0 1 0-1.5 1.5l4.4 4.4 1.5-1.5ZM5 10.5a5.5 5.5 0 1 1 11 0 5.5 5.5 0 0 1-11 0Z" /></svg>
-        <label class="sr-only" for="search-input">Search communities, roads, addresses, personal locations, and mile markers</label>
+        <label class="sr-only" for="search-input">Search communities, roads, addresses, personal locations, mile markers, and VSID points</label>
         <input id="search-input" type="search" autocomplete="off" enterkeyhint="search" placeholder="Search this map" disabled />
         <button id="clear-search" class="clear-button" type="button" aria-label="Clear search" hidden>&times;</button>
       </div>
@@ -50,6 +50,7 @@
         <button class="filter-chip" type="button" data-filter="building">Buildings</button>
         <button class="filter-chip" type="button" data-filter="mile">Mile markers</button>
         <button class="filter-chip" type="button" data-filter="collected">Collected</button>
+        <button class="filter-chip" type="button" data-filter="vsid">VSID</button>
       </div>
 
       <div id="search-results" class="search-results" role="listbox" aria-label="Search results" hidden></div>
@@ -119,6 +120,33 @@
       </div>
       <p id="data-status" class="data-status" role="status" aria-live="polite"></p>
       <input id="data-file-input" type="file" accept=".json,.fieldmap.json,application/json" hidden />
+
+      <div class="dialog-section vsid-section">
+        <span class="eyebrow vsid-eyebrow">Last resort only</span>
+        <h3>VSID - voluntary self-identified addresses</h3>
+        <p class="handoff-note">Where residents told us they live, from the VSID form. Nobody has checked these. They show as yellow diamonds, come last in search, and should be used only when no official address or mile marker fits.</p>
+        <div class="data-source-card vsid-card">
+          <strong id="vsid-summary">No VSID list on this device</strong>
+          <span id="vsid-detail">Import the form responses .csv to add them.</span>
+        </div>
+        <div id="vsid-problems" class="vsid-problems" hidden></div>
+        <div class="data-action-list">
+          <button id="import-vsid" type="button">
+            <strong>Import VSID list</strong>
+            <span>Choose the form responses .csv - replaces the current list</span>
+          </button>
+          <button id="share-vsid" type="button" disabled>
+            <strong>Send VSID list</strong>
+            <span>Pass the same .csv on by email, text, Teams, or Bluetooth</span>
+          </button>
+          <button id="remove-vsid" class="danger-soft" type="button" disabled>
+            <strong>Remove VSID list</strong>
+            <span>From this device only</span>
+          </button>
+        </div>
+        <p id="vsid-status" class="data-status" role="status" aria-live="polite"></p>
+        <input id="vsid-file-input" type="file" accept=".csv,text/csv,text/comma-separated-values" hidden />
+      </div>
 
       <div class="dialog-section">
         <span class="eyebrow">Field collection</span>
@@ -213,7 +241,8 @@
 
     <noscript>This map requires JavaScript.</noscript>
     <script src="./vendor/leaflet/leaflet.js"></script>
-    <script src="./sync.js?v=handoff-1" defer></script>
-    <script src="./app.js?v=handoff-1" defer></script>
+    <script src="./sync.js?v=vsid-1" defer></script>
+    <script src="./vsid.js?v=vsid-1" defer></script>
+    <script src="./app.js?v=vsid-1" defer></script>
   </body>
 </html>

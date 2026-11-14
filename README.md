@@ -64,12 +64,45 @@ merging half a map in silence.
 **For the office**, **Data → Send a collected points file** still sends a `.geojson` of the collected
 points only - never the imported update.
 
+## VSID: voluntary self-identified addresses
+
+VSID points are where residents told us they live, through the VSID form. Nobody has checked them,
+so they are a last resort: use one only when no official address or mile marker fits.
+
+The app marks them so nobody mistakes one for an official address:
+
+- On the map they are yellow diamonds with a dashed `VSID:` label. Every other point is round.
+- Their popup says **VSID - last resort only** and that the location is not verified.
+- In search they come after every other match, and the **VSID** filter shows only them.
+- A phone number from the form becomes a **Call** button, and searching the number finds the point.
+
+**To get them onto everyone's maps**, no rebuild of the map update is needed:
+
+1. Open the form's response sheet in Google Sheets on a computer and choose
+   **File → Download → Comma-separated values (.csv)**.
+2. Send that file out the way updates already go: email, Teams, text, or Bluetooth.
+3. Each person opens **Data → Import VSID list** and picks the file.
+
+Anyone who already has the list can pass it on with **Send VSID list**.
+
+Each import replaces the whole list. The sheet holds every response, so the newest download is always
+the complete list, and a row deleted from the sheet disappears from each phone at its next import.
+
+Rows that cannot go on the map are listed in the Data panel by their row number in the sheet, so they
+can be fixed there. That covers a missing or non-numeric latitude or longitude, a response sent twice,
+and a point more than about 40 km outside the imported map's area. The area check needs an imported
+map update; without one, every row with usable coordinates is drawn.
+
+The VSID list is kept apart from everything else on the phone. Importing or removing a map update, or
+clearing collected points, leaves it alone, and **Remove VSID list** removes it from that phone only.
+
 ## Privacy
 
 Deleting the imported update from the app returns the hosted shell to an empty state. Clearing site data or removing the installed PWA also removes the device-local imported dataset.
 
-Collected points and the hand-off blocks stay on the devices that hold them. Nothing about them is
-uploaded, and the app has no server to upload them to.
+Collected points, the hand-off blocks, and the VSID list stay on the devices that hold them. Nothing
+about them is uploaded, and the app has no server to upload them to. The VSID form's responses hold
+residents' homes and phone numbers, so like every other data file they never go in this repository.
 
 ## The hand-off format
 
@@ -95,10 +128,11 @@ END
 
 ## Tests
 
-`docs/sync.js` holds the hand-off rules and nothing that touches the page, so it runs under Node:
+`docs/sync.js` holds the hand-off rules and `docs/vsid.js` the rules for reading the VSID form's
+`.csv`. Neither touches the page, so both run under Node:
 
 ```
-node --test tests/sync.test.js
+node --test tests/sync.test.js tests/vsid.test.js
 ```
 
 Two longer checks drive the real app in a browser. They need a local server and Playwright, so they
@@ -110,4 +144,5 @@ node tests/handoff.browser.js     # two phones collecting and handing off by tex
 node tests/fanout.browser.js      # one block handed to a partner and the next crew
 node tests/duplicates.browser.js  # repeated merges must not fill up the search
 node tests/upgrade.browser.js     # a phone that already has points opening this version
+node tests/vsid.browser.js        # importing a VSID list, how it looks, searches, and is kept apart
 ```
