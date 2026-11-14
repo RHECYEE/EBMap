@@ -61,6 +61,14 @@ const els = {
   clearMerge: document.querySelector("#clear-merge"),
   mergeStatus: document.querySelector("#merge-status"),
   filterChips: [...document.querySelectorAll(".filter-chip")],
+  vsidSummary: document.querySelector("#vsid-summary"),
+  vsidDetail: document.querySelector("#vsid-detail"),
+  vsidProblems: document.querySelector("#vsid-problems"),
+  vsidStatus: document.querySelector("#vsid-status"),
+  importVsid: document.querySelector("#import-vsid"),
+  shareVsid: document.querySelector("#share-vsid"),
+  removeVsid: document.querySelector("#remove-vsid"),
+  vsidFileInput: document.querySelector("#vsid-file-input"),
 };
 
 const map = L.map("map", { zoomControl: false, preferCanvas: true, minZoom: 6 });
@@ -72,6 +80,8 @@ map.createPane("buildingPane");
 map.getPane("buildingPane").style.zIndex = "350";
 map.createPane("collectedPane");
 map.getPane("collectedPane").style.zIndex = "640";
+map.createPane("vsidPane");
+map.getPane("vsidPane").style.zIndex = "630";
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
   maxZoom: 19,
   attribution: 'Map &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>; buildings &copy; <a href="https://overturemaps.org/">Overture Maps Foundation</a>',
@@ -85,6 +95,7 @@ const locationLayers = new Map();
 const communityLayers = new Map();
 const buildingLayers = new Map();
 const collectedLayers = new Map();
+const vsidLayers = new Map();
 const searchDocuments = [];
 let activeFilter = "all";
 let highlightedRoad = null;
@@ -102,6 +113,9 @@ let handoffScope = "pending";
 let copiedBlock = "";
 let pendingPacket = null;
 let collectedLayerGroup = null;
+let vsidLayerGroup = null;
+let vsidList = null;
+let vsidOutsideArea = [];
 let collectMode = false;
 let draftLatLng = null;
 let editingPointId = null;
@@ -112,7 +126,9 @@ const DATA_DB_NAME = "field-map-local-data";
 const DATA_STORE_NAME = "updates";
 const ACTIVE_UPDATE_KEY = "active-update";
 const COLLECTED_POINTS_KEY = "collected-points";
+const VSID_KEY = "vsid-list";
 const COLLECTED_LABEL_MIN_ZOOM = 16;
+const VSID_LABEL_MIN_ZOOM = 16;
 const COMMUNITY_LABEL_MAX_ZOOM = 13;
 const ROAD_LABEL_MIN_ZOOM = 14;
 const MILE_LABEL_MIN_ZOOM = 16;
@@ -236,6 +252,34 @@ async function writeCollectedPoints(state) {
   });
 }
 
+async function readStoredValue(key) {
+  const database = await openDataDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(DATA_STORE_NAME, "readonly");
+    const request = transaction.objectStore(DATA_STORE_NAME).get(key);
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error || new Error("Could not read local storage"));
+    transaction.oncomplete = () => database.close();
+  });
+}
+
+async function writeStoredValue(key, value) {
+  const database = await openDataDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(DATA_STORE_NAME, "readwrite");
+    if (value === null) transaction.objectStore(DATA_STORE_NAME).delete(key);
+    else transaction.objectStore(DATA_STORE_NAME).put(value, key);
+    transaction.oncomplete = () => {
+      database.close();
+      resolve();
+    };
+    transaction.onerror = () => {
+      database.close();
+      reject(transaction.error || new Error("Could not save to local storage"));
+    };
+  });
+}
+
 function validateBundle(candidate) {
   if (!candidate || candidate.type !== "field-map-update" || candidate.schemaVersion !== DATA_SCHEMA_VERSION) {
     throw new Error("This is not a supported Field Map update file");
@@ -318,7 +362,7 @@ function setDataSummary(text) {
 }
 
 function refreshSearchAvailability() {
-  const searchable = Boolean(currentBundle) || collectedState.features.length > 0;
+  const searchable = Boolean(currentBundle) || collectedState.features.length > 0 || vsidLayers.size > 0;
   els.searchInput.disabled = !searchable;
   if (searchable) return;
   els.searchInput.value = "";
@@ -329,9 +373,10 @@ function refreshSearchAvailability() {
 
 function refreshDataSummary() {
   const total = collectedState.features.length;
-  els.dataSummary.textContent = total
-    ? `${dataSummaryBase} - ${total.toLocaleString()} collected`
-    : dataSummaryBase;
+  const parts = [dataSummaryBase];
+  if (total) parts.push(`${total.toLocaleString()} collected`);
+  if (vsidLayers.size) parts.push(`${vsidLayers.size.toLocaleString()} VSID`);
+  els.dataSummary.textContent = parts.join(" - ");
 }
 
 function showToast(message) {
@@ -631,6 +676,11 @@ function updateRenderedLabels() {
     if (visible && zoom >= COLLECTED_LABEL_MIN_ZOOM) candidates.push(layer);
     else setLocationLabelMode(layer, false);
   });
+  vsidLayers.forEach((layer) => {
+    const visible = visibleBounds.contains(layer.getLatLng());
+    if (visible && zoom >= VSID_LABEL_MIN_ZOOM) candidates.push(layer);
+    else setLocationLabelMode(layer, false);
+  });
   locationLayers.forEach((layer) => {
     const kind = layer.feature.properties.kind;
     const threshold = kind === "mile" ? MILE_LABEL_MIN_ZOOM : HOUSE_LABEL_MIN_ZOOM;
@@ -647,7 +697,7 @@ function updateRenderedLabels() {
     .sort((left, right) => {
       if (left === highlightedLocation) return -1;
       if (right === highlightedLocation) return 1;
-      const priorities = { collected: -1, personal: 0, address: 1, mile: 2 };
+      const priorities = { collected: -1, personal: 0, address: 1, mile: 2, vsid: 3 };
       return priorities[left.feature.properties.kind] - priorities[right.feature.properties.kind]
         || left.getLatLng().lat - right.getLatLng().lat;
     })
@@ -708,7 +758,10 @@ function runSearch() {
     .filter((document) => activeFilter === "all" || document.kind === activeFilter)
     .map((document) => ({ document, score: scoreDocument(document, query, tokens) }))
     .filter((entry) => entry.score !== null)
-    .sort((left, right) => left.score - right.score || left.document.label.localeCompare(right.document.label))
+    // VSID is the last resort, so it comes after every other match, however good.
+    .sort((left, right) => (left.document.kind === "vsid") - (right.document.kind === "vsid")
+      || left.score - right.score
+      || left.document.label.localeCompare(right.document.label))
     .slice(0, 30);
 
   els.searchResults.hidden = false;
@@ -750,6 +803,12 @@ function selectResult(kind, id) {
     map.flyTo(layer.getLatLng(), 18, { duration: 0.5 });
     layer.openPopup();
     copyCoordinates(layer.getLatLng(), layer.feature.properties.label);
+  } else if (kind === "vsid") {
+    const layer = vsidLayers.get(id);
+    if (!layer) return;
+    map.flyTo(layer.getLatLng(), 18, { duration: 0.5 });
+    layer.openPopup();
+    copyCoordinates(layer.getLatLng(), vsidContext(layer.feature.properties));
   } else if (kind === "community") {
     const layer = communityLayers.get(id);
     if (!layer) return;
@@ -887,6 +946,11 @@ els.shareData.addEventListener("click", shareCurrentUpdate);
 els.dataFileInput.addEventListener("change", async () => {
   const file = els.dataFileInput.files?.[0];
   if (!file) return;
+  if (/\.csv$/i.test(file.name)) {
+    els.dataStatus.textContent = "That is a VSID list, not a map update. Use Import VSID list further down.";
+    els.dataFileInput.value = "";
+    return;
+  }
   els.dataStatus.textContent = `Checking ${file.name}...`;
   try {
     const bundle = validateBundle(JSON.parse(await file.text()));
@@ -1525,6 +1589,201 @@ els.mergeText.addEventListener("input", () => {
   els.mergeStatus.textContent = "";
 });
 
+// --- VSID: voluntary self-identified addresses -------------------------------
+// Residents' own reports of where they live, from the office's form. Nobody has
+// checked them, so they get their own layer, look, label, and search rank, and
+// every popup says so. The list lives under its own storage key: importing or
+// removing a map update, or clearing collected points, leaves it alone. The
+// rules for reading the form's .csv live in vsid.js.
+
+function vsidContext(properties) {
+  return `VSID (last resort): ${properties.label}`;
+}
+
+function vsidIcon() {
+  return L.divIcon({ className: "vsid-marker", html: "<span></span>", iconSize: [22, 22], iconAnchor: [11, 11] });
+}
+
+function vsidPopupHtml(properties, latlng) {
+  const latitude = Number(latlng.lat).toFixed(6);
+  const longitude = Number(latlng.lng).toFixed(6);
+  const submitted = properties.submitted ? `<small class="vsid-submitted">Submitted ${escapeHtml(properties.submitted)}</small>` : "";
+  const call = properties.phoneHref
+    ? `<a class="vsid-call" href="${escapeHtml(properties.phoneHref)}">Call ${escapeHtml(properties.phone)}</a>`
+    : "";
+  return `<div class="map-popup vsid-popup">
+    <span class="vsid-badge">VSID - last resort only</span>
+    <strong>${escapeHtml(properties.label)}</strong>
+    <small class="vsid-warning">Self-identified by the resident and not verified. Use only when no official address or mile marker fits.</small>
+    ${submitted}
+    <div class="popup-actions">
+      <button type="button" data-copy-lat="${latitude}" data-copy-lng="${longitude}" data-copy-context="${escapeHtml(vsidContext(properties))}">Copy coordinates</button>
+      <a href="${navigationUrl(latlng)}" target="_blank" rel="noopener">Navigate</a>
+      ${call}
+    </div></div>`;
+}
+
+// An import replaces the whole list, so the layer is rebuilt rather than
+// patched. Points far outside the imported map are held back and listed in the
+// Data panel instead, so a stray response cannot pull a search to another state.
+function renderVsidList() {
+  if (!vsidLayerGroup) vsidLayerGroup = L.layerGroup().addTo(map);
+  vsidLayerGroup.clearLayers();
+  vsidLayers.clear();
+  for (let index = searchDocuments.length - 1; index >= 0; index -= 1) {
+    if (searchDocuments[index].kind === "vsid") searchDocuments.splice(index, 1);
+  }
+
+  const bounds = currentBundle?.meta?.bounds || null;
+  vsidOutsideArea = [];
+  (vsidList?.points || []).forEach((point) => {
+    if (bounds && FieldMapVsid.outsideArea(point, bounds)) {
+      vsidOutsideArea.push(point);
+      return;
+    }
+    const properties = FieldMapVsid.pointProperties(point);
+    const latlng = L.latLng(point.latitude, point.longitude);
+    const layer = L.marker(latlng, { pane: "vsidPane", icon: vsidIcon() });
+    layer.feature = { type: "Feature", properties };
+    layer.bindPopup(vsidPopupHtml(properties, latlng));
+    layer.on("click", (event) => {
+      if (event.originalEvent) L.DomEvent.stopPropagation(event.originalEvent);
+      copyCoordinates(latlng, vsidContext(properties));
+    });
+    vsidLayerGroup.addLayer(layer);
+    vsidLayers.set(properties.id, layer);
+    indexDocument(properties);
+    setLocationLabelMode(layer, false);
+  });
+
+  updateVsidPanel();
+  refreshDataSummary();
+  refreshSearchAvailability();
+  updateRenderedLabels();
+  runSearch();
+}
+
+function updateVsidPanel() {
+  const shown = vsidLayers.size;
+  els.shareVsid.disabled = !vsidList;
+  els.removeVsid.disabled = !vsidList;
+  if (!vsidList) {
+    els.vsidSummary.textContent = "No VSID list on this device";
+    els.vsidDetail.textContent = "Import the form responses .csv to add them.";
+    els.vsidProblems.hidden = true;
+    els.vsidProblems.replaceChildren();
+    return;
+  }
+  els.vsidSummary.textContent = `${plural(shown, "VSID point", "VSID points")} on the map`;
+  const when = shortTime(vsidList.importedUtc);
+  els.vsidDetail.textContent = [when && `Imported ${when}`, vsidList.fileName].filter(Boolean).join(" - ");
+
+  const problems = [
+    ...vsidList.problems,
+    ...vsidOutsideArea.map((point) => ({
+      row: point.row,
+      label: point.address || FieldMapVsid.NO_ADDRESS_LABEL,
+      reason: `far outside the map area (${point.latitude}, ${point.longitude})`,
+    })),
+  ].sort((left, right) => left.row - right.row);
+  els.vsidProblems.hidden = problems.length === 0;
+  if (!problems.length) {
+    els.vsidProblems.replaceChildren();
+    return;
+  }
+  const heading = document.createElement("strong");
+  heading.textContent = `${plural(problems.length, "row", "rows")} not on the map - fix in the form's sheet`;
+  const list = document.createElement("ul");
+  problems.forEach((problem) => {
+    const item = document.createElement("li");
+    item.textContent = `Row ${problem.row} - ${problem.label}: ${problem.reason}`;
+    list.appendChild(item);
+  });
+  els.vsidProblems.replaceChildren(heading, list);
+}
+
+function vsidFileName() {
+  const imported = new Date(vsidList?.importedUtc || Date.now());
+  const date = Number.isNaN(imported.getTime()) ? new Date().toISOString().slice(0, 10) : imported.toISOString().slice(0, 10);
+  return `field-map-vsid-${date}.csv`;
+}
+
+async function importVsidFile(file) {
+  els.vsidStatus.textContent = `Checking ${file.name}...`;
+  try {
+    const record = FieldMapVsid.makeVsidRecord({
+      text: await file.text(),
+      fileName: file.name,
+      importedUtc: new Date().toISOString(),
+    });
+    const list = { ...record, ...FieldMapVsid.parseVsidCsv(record.text) };
+    if (!list.points.length) throw new Error("no row has a usable latitude and longitude");
+    await writeStoredValue(VSID_KEY, record);
+    vsidList = list;
+    renderVsidList();
+    const held = list.problems.length + vsidOutsideArea.length;
+    els.vsidStatus.textContent = `VSID list imported: ${plural(vsidLayers.size, "point", "points")} on the map${held ? `, ${plural(held, "row", "rows")} left off - listed above` : ""}. It replaces any earlier list.`;
+    showToast("VSID list imported");
+  } catch (error) {
+    els.vsidStatus.textContent = `Import failed: ${error.message}`;
+    showToast("Could not import that VSID list");
+  }
+}
+
+async function shareVsidList() {
+  if (!vsidList) return;
+  const file = new File([vsidList.text], vsidFileName(), { type: "text/csv" });
+  if (navigator.share && navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({
+        title: "Field Map VSID list",
+        text: "Import this from Field Map's Data panel: Import VSID list. Last resort only - not verified.",
+        files: [file],
+      });
+      els.vsidStatus.textContent = "VSID list sent.";
+      return;
+    } catch (error) {
+      if (error?.name === "AbortError") return;
+    }
+  }
+  downloadUpdateFile(file);
+  els.vsidStatus.textContent = "VSID list saved. Attach it to email, Teams, Bluetooth, text, or another channel.";
+  showToast("VSID list saved for sharing");
+}
+
+async function removeVsidList() {
+  if (!window.confirm("Remove the VSID list from this device? Other phones keep theirs.")) return;
+  try {
+    await writeStoredValue(VSID_KEY, null);
+    vsidList = null;
+    renderVsidList();
+    els.vsidStatus.textContent = "VSID list removed from this device.";
+  } catch (error) {
+    els.vsidStatus.textContent = error.message;
+  }
+}
+
+async function loadVsidList() {
+  let stored = null;
+  try {
+    stored = await readStoredValue(VSID_KEY);
+  } catch (error) {
+    console.warn("VSID list could not be read", error);
+  }
+  vsidList = FieldMapVsid.loadVsidRecord(stored);
+  if (stored && !vsidList) console.warn("Saved VSID list is unreadable; import it again");
+  renderVsidList();
+}
+
+els.importVsid.addEventListener("click", () => els.vsidFileInput.click());
+els.vsidFileInput.addEventListener("change", async () => {
+  const file = els.vsidFileInput.files?.[0];
+  if (file) await importVsidFile(file);
+  els.vsidFileInput.value = "";
+});
+els.shareVsid.addEventListener("click", shareVsidList);
+els.removeVsid.addEventListener("click", removeVsidList);
+
 async function loadMapData() {
   try {
     appConfiguration = await loadAppConfiguration();
@@ -1703,4 +1962,5 @@ async function disableOfflineMode() {
 window.addEventListener("load", disableOfflineMode);
 
 loadCollectedPoints();
-loadMapData();
+// After the map data, so a VSID point can be checked against the map's area.
+loadMapData().then(loadVsidList);
